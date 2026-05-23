@@ -8,17 +8,29 @@ import com.highcapable.kavaref.extension.createInstance
 import com.tencent.mm.opensdk.modelmsg.WXFileObject
 import com.tencent.mm.opensdk.modelmsg.WXMediaMessage
 import dev.ujhhgtg.comptime.nameOf
+import dev.ujhhgtg.wekit.constants.WeChatVersions
 import dev.ujhhgtg.wekit.dexkit.abc.IResolvesDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexClass
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
+import dev.ujhhgtg.wekit.hooks.api.net.WeNetSceneApi
 import dev.ujhhgtg.wekit.hooks.core.ApiHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
+import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
+import dev.ujhhgtg.wekit.utils.collections.emptyHashSet
+import dev.ujhhgtg.wekit.utils.reflection.BString
+import dev.ujhhgtg.wekit.utils.reflection.asConstuctor
 import dev.ujhhgtg.wekit.utils.reflection.asMethod
 import dev.ujhhgtg.wekit.utils.reflection.asResolver
+import dev.ujhhgtg.wekit.utils.reflection.bool
+import dev.ujhhgtg.wekit.utils.reflection.dexKit
+import dev.ujhhgtg.wekit.utils.reflection.int
+import dev.ujhhgtg.wekit.utils.reflection.isBuiltin
 import dev.ujhhgtg.wekit.utils.reflection.makeAccessible
+import dev.ujhhgtg.wekit.utils.serialization.JsonToXmlConverter
 import dev.ujhhgtg.wekit.utils.serialization.XmlUtils.extractXmlAttr
 import dev.ujhhgtg.wekit.utils.serialization.XmlUtils.extractXmlTag
+import org.json.JSONObject
 import org.luckypray.dexkit.DexKitBridge
 import java.io.InputStream
 import java.io.OutputStream
@@ -39,9 +51,6 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
     private val classNetSceneQueue by dexClass()
     val classNetSceneBase by dexClass()
     private val classNetSceneObserverOwner by dexClass()
-
-    // FIXME: new versions no longer has NetSceneUploadMsgImg
-    //    private val ctorNetSceneUploadMsgImg by dexConstructor()
     private val methodGetSendMsgObject by dexMethod()
     private val methodPostToQueue by dexMethod()
     private val methodShareFile by dexMethod()
@@ -62,6 +71,7 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
     private val classServiceManager by dexClass()   // ServiceManager
     private val classConfigLogic by dexClass()      // ConfigStorageLogic
     private val classImageServiceImpl by dexClass()
+    private val methodImageSendEntry by dexMethod()
 
     // -------------------------------------------------------------------------------------
     // 语音发送组件
@@ -140,19 +150,6 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
                 }
             }
         }
-
-//        val str = String::class.java
-//
-//        ctorNetSceneUploadMsgImg.find(dexKit) {
-//            searchPackages("com.tencent.mm.modelimage")
-//            matcher {
-//                declaredClass {
-//                    usingEqStrings("MicroMsg.NetSceneUploadMsgImg", "/cgi-bin/micromsg-bin/uploadmsgimg")
-//                }
-//
-//                paramTypes(int, str, str, str, int, null, int, str, str, bool, int)
-//            }
-//        }
 
         classNetSceneSendMsg.find(dexKit) {
             matcher {
@@ -277,16 +274,16 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
             }
         }
 
-        val methodImageSendEntry = dexKit.findMethod {
+        methodImageSendEntry.find(dexKit) {
             matcher {
                 declaredClass(classImageSender.clazz)
                 modifiers = Modifier.PUBLIC or Modifier.STATIC or Modifier.FINAL
                 paramCount(4, 5)
                 usingEqStrings("send_mid_size", "send_hevc_mid_size")
             }
-        }.single().asMethod
+        }
 
-        val taskClassName = methodImageSendEntry.parameterTypes[1]
+        val taskClassName = methodImageSendEntry.method.parameterTypes[1]
         classImageTask.setDescriptor(taskClassName.name)
 
         // this also seems applicable
@@ -422,9 +419,7 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
 
         // 遍历所有接口，找到第一个非系统接口作为 Service 接口
         val targetInterface = classVoiceServiceImpl.clazz.interfaces.first {
-            !it.name.startsWith("java.") && !it.name.startsWith("android.") && !it.name.startsWith(
-                "kotlin."
-            ) && !it.name.startsWith("ki0.") // FIXME: might change with WeChat version
+            !it.isBuiltin && !it.name.startsWith("ki0.") // FIXME: might change with WeChat version
         }
         classVoiceServiceInterface.setDescriptor(targetInterface.name)
     }
@@ -513,7 +508,7 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
             }.self
 
         imageServiceApiClass = classImageServiceImpl.clazz.interfaces.first {
-            !it.name.startsWith("java.") && !it.name.startsWith("android.")
+            !it.isBuiltin
         }
 
         sendImageMethod = classImageServiceImpl.clazz.declaredMethods.first { m ->
@@ -577,17 +572,14 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
     /** 发送图片消息 */
     fun sendImage(toUser: String, imgPath: String): Boolean {
         return try {
-            val apiInterface = imageServiceApiClass
-            val taskClass = classImageTask.clazz
-
-            val serviceObj = getServiceMethod?.invoke(null, apiInterface) ?: return false
+            val serviceObj = getServiceMethod?.invoke(null, imageServiceApiClass) ?: return false
 
             val paramsObj = crossParamsClass.createInstance()
             paramsObj.asResolver()
-                .firstField { type = Int::class.javaPrimitiveType }
+                .firstField { type = int }
                 .set(4)
 
-            val taskObj = taskClass.createInstance(
+            val taskObj = classImageTask.clazz.createInstance(
                 imgPath,
                 0,
                 selfCustomWxId,
@@ -608,26 +600,68 @@ object WeMessageApi : ApiHookItem(), IResolvesDex {
         }
     }
 
-    // FIXME: new versions no longer has NetSceneUploadMsgImg
-//    fun sendImageByMd5(toUser: String, md5: String, appMsgAppId: String?) {
-//        val xml: String?
-//        val wxId = WeApi.selfWxId
-//        if (appMsgAppId != null) {
-//            val json = JSONObject()
-//            val json2 = JSONObject()
-//            val json3 = JSONObject()
-//            json3.put("appid", appMsgAppId)
-//            json2.put("appinfo", json3)
-//            json.put("msg", json2)
-//            val converter = JsonToXmlConverter(json, emptyHashSet(), emptyHashSet())
-//            xml = converter.toString()
-//        } else {
-//            xml = null
-//        }
-//        WeNetSceneApi.addNetSceneToQueue(
-//            ctorNetSceneUploadMsgImg.newInstance(4, wxId, toUser, md5, 1, null, 0, xml, "", true, 0)
-//        )
-//    }
+    private lateinit var methodImgUploadFeatureServiceSendImage: Method
+    private lateinit var ctorNetSceneUploadMsgImg: Constructor<*>
+
+    fun sendImageByMd5(toUser: String, md5: String, appMsgAppId: String?) {
+        if ((HostInfo.versionCode >= WeChatVersions.MM_8_0_67 && !HostInfo.isHostGooglePlay) ||
+            HostInfo.versionCode >= WeChatVersions.MM_8_0_66_PLAY && HostInfo.isHostGooglePlay
+        ) {
+            if (!::methodImgUploadFeatureServiceSendImage.isInitialized) {
+                methodImgUploadFeatureServiceSendImage =
+                    dexKit.findMethod {
+                        matcher {
+                            declaredClass {
+                                usingEqStrings("MicroMsg.ImgUpload.MsgImgFeatureService", "taskListener", "params")
+                            }
+
+                            paramCount(1)
+                            usingEqStrings("params")
+                        }
+                    }.single().asMethod
+            }
+
+            val sendImageMethod = methodImgUploadFeatureServiceSendImage
+            val paramsClass = sendImageMethod.parameterTypes[0]
+            val crossParamsClass = paramsClass.asResolver()
+                .firstField { type { !it.isBuiltin } }.self.type
+            val crossParams = crossParamsClass.createInstance()
+            val params = paramsClass.createInstance(md5, 1, WeApi.selfWxId, toUser, crossParams)
+            sendImageMethod.invoke(WeServiceApi.getServiceByClass(sendImageMethod.declaringClass), params)
+        } else {
+            if (!::ctorNetSceneUploadMsgImg.isInitialized) {
+                ctorNetSceneUploadMsgImg =
+                    dexKit.findMethod {
+                        searchPackages("com.tencent.mm.modelimage")
+                        matcher {
+                            name = "<init>"
+                            declaredClass {
+                                usingEqStrings("MicroMsg.NetSceneUploadMsgImg", "/cgi-bin/micromsg-bin/uploadmsgimg")
+                            }
+                            paramTypes(int, BString, BString, BString, int, null, int, BString, BString, bool, int)
+                        }
+                    }.single().asConstuctor
+            }
+
+            val xml: String?
+            val wxId = WeApi.selfWxId
+            if (appMsgAppId != null) {
+                val json = JSONObject()
+                val json2 = JSONObject()
+                val json3 = JSONObject()
+                json3.put("appid", appMsgAppId)
+                json2.put("appinfo", json3)
+                json.put("msg", json2)
+                val converter = JsonToXmlConverter(json, emptyHashSet(), emptyHashSet())
+                xml = converter.toString()
+            } else {
+                xml = null
+            }
+            WeNetSceneApi.addNetSceneToQueue(
+                ctorNetSceneUploadMsgImg.newInstance(4, wxId, toUser, md5, 1, null, 0, xml, "", true, 0)
+            )
+        }
+    }
 
     /** 发送文本消息 */
     fun sendText(toUser: String, text: String): Boolean {

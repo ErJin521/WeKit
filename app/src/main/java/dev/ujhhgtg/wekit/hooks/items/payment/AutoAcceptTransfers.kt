@@ -31,10 +31,10 @@ object AutoAcceptTransfers : SwitchHookItem(), IResolvesDex, WeDatabaseListenerA
         if (table != "message") return
 
         val type = values.getAsInteger("type") ?: 0
-        if (type == MessageType.TRANSFER.code) {
-            WeLogger.i(TAG, "detected transfer message; type=$type")
-            handleTransfer(values)
-        }
+        if (type != MessageType.TRANSFER.code) return
+
+        WeLogger.i(TAG, "detected transfer message; type=$type")
+        handleTransfer(values)
     }
 
     private val RECEIVER_USERNAME_REGEX = Regex("""receiver_username.*?>\s*<!\[CDATA\[(.*?)]]>""")

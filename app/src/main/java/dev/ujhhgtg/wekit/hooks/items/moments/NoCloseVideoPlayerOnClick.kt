@@ -9,6 +9,7 @@ import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.hooks.core.HookItem
 import dev.ujhhgtg.wekit.hooks.core.SwitchHookItem
 import dev.ujhhgtg.wekit.utils.reflection.asResolver
+import dev.ujhhgtg.wekit.utils.reflection.isBuiltin
 import dev.ujhhgtg.wekit.utils.reflection.makeAccessible
 import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Field
@@ -39,11 +40,7 @@ object NoCloseVideoPlayerOnClick : SwitchHookItem(), IResolvesDex {
                 if (!::viewStateField.isInitialized) {
                     viewStateField = activity.asResolver()
                         .firstField {
-                            type {
-                                !it.isPrimitive &&
-                                        !it.name.startsWith("java.") &&
-                                        !it.name.startsWith("android.")
-                            }
+                            type { !it.isBuiltin }
                         }.self
                 }
 

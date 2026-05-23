@@ -16,6 +16,7 @@ import dev.ujhhgtg.wekit.hooks.core.ApiHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.reflection.ClassLoaders
+import dev.ujhhgtg.wekit.utils.reflection.isBuiltin
 import dev.ujhhgtg.wekit.utils.reflection.makeAccessible
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -322,9 +323,7 @@ object WePacketHelper : ApiHookItem(), IResolvesDex {
             val wrapperClass = wrapperClassName.toClass()
             val realProtoClass = wrapperClass.declaredFields.firstOrNull { field ->
                 val type = field.type
-                !type.isPrimitive &&
-                        !type.name.startsWith("java.") &&
-                        isExtendsBaseProtoBuf(type)
+                !type.isBuiltin && isExtendsBaseProtoBuf(type)
             }?.type ?: throw NoSuchElementException("在 Wrapper 类中未找到实体字段")
 
             WeLogger.i(TAG, "oplog 定位成功 ${realProtoClass.name}")

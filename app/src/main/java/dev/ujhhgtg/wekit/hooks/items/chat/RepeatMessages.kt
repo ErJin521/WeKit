@@ -1,6 +1,7 @@
 package dev.ujhhgtg.wekit.hooks.items.chat
 
 import dev.ujhhgtg.wekit.hooks.api.core.WeMessageApi
+import dev.ujhhgtg.wekit.hooks.api.core.WeServiceApi
 import dev.ujhhgtg.wekit.hooks.api.core.models.MessageType
 import dev.ujhhgtg.wekit.hooks.api.ui.WeChatMessageContextMenuApi
 import dev.ujhhgtg.wekit.hooks.core.HookItem
@@ -22,7 +23,7 @@ object RepeatMessages : SwitchHookItem(), WeChatMessageContextMenuApi.IMenuItems
     }
 
     private val SUPPORTED_MSG_TYPES = setOf(
-        MessageType.TEXT, MessageType.QUOTE, MessageType.APP
+        MessageType.TEXT, MessageType.QUOTE, MessageType.APP, MessageType.IMAGE
     )
 
     override fun getMenuItems(): List<WeChatMessageContextMenuApi.MenuItem> {
@@ -56,12 +57,11 @@ object RepeatMessages : SwitchHookItem(), WeChatMessageContextMenuApi.IMenuItems
                             showToast(context, "已发送")
                         }
 
-                        // FIXME
-//                        MessageType.IMAGE -> {
-//                            val md5 = WeServiceApi.getImageMsgInfoMd5(msgInfo)
-//                            WeMessageApi.sendImageByMd5(msgInfo.talker, md5, null)
-//                            showToast(view.context, "已发送")
-//                        }
+                        MessageType.IMAGE -> {
+                            val md5 = WeServiceApi.getImageMd5FromMsgInfo(msgInfo)
+                            WeMessageApi.sendImageByMd5(msgInfo.talker, md5, null)
+                            showToast(view.context, "已发送")
+                        }
 
                         else -> {}
                     }

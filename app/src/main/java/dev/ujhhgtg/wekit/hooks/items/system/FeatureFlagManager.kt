@@ -46,6 +46,7 @@ import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.copyToClipboard
 import dev.ujhhgtg.wekit.utils.android.showToast
 import dev.ujhhgtg.wekit.utils.reflection.asResolver
+import dev.ujhhgtg.wekit.utils.reflection.dexKit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.luckypray.dexkit.DexKitBridge
@@ -174,10 +175,9 @@ object FeatureFlagManager : ClickableHookItem(), IResolvesDex {
 
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.IO) {
-                    val bridge = DexKitBridge.create(context.applicationInfo.sourceDir)
                     val superClassName = classRepairerConfigBaseImpl.clazz.name
 
-                    val results = bridge.findClass {
+                    val results = dexKit.findClass {
                         matcher {
                             superClass {
                                 superClass {
@@ -188,7 +188,6 @@ object FeatureFlagManager : ClickableHookItem(), IResolvesDex {
                         }
                     }
                     featureFlagClasses = results.map { it.name }.sorted()
-                    bridge.close()
                     isLoading = false
                 }
             }

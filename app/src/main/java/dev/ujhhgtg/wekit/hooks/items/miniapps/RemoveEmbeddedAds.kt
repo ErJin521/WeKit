@@ -6,6 +6,7 @@ import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.hooks.core.HookItem
 import dev.ujhhgtg.wekit.hooks.core.SwitchHookItem
 import dev.ujhhgtg.wekit.utils.reflection.asResolver
+import dev.ujhhgtg.wekit.utils.reflection.isBuiltin
 import org.json.JSONObject
 import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Field
@@ -32,9 +33,7 @@ object RemoveEmbeddedAds : SwitchHookItem(), IResolvesDex {
             if (!::protoField.isInitialized) {
                 protoField = transferResultInfo.asResolver()
                     .firstField {
-                        type {
-                            !it.isPrimitive && !it.name.startsWith("java.") && !it.name.startsWith("android.")
-                        }
+                        type { !it.isBuiltin }
                     }.self
             }
 

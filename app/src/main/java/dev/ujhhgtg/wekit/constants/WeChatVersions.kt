@@ -7,6 +7,7 @@ object WeChatVersions {
     const val MM_8_0_69 = 3040
     const val MM_8_0_67 = 3000
     const val MM_8_0_66 = 2980
+    const val MM_8_0_66_PLAY = 2963
     const val MM_8_0_65 = 2960
     const val MM_8_0_64 = 2940
     const val MM_8_0_63 = 2920

@@ -38,6 +38,7 @@ import dev.ujhhgtg.wekit.utils.fs.createDirectoriesNoThrow
 import dev.ujhhgtg.wekit.utils.polyfills.intoList
 import dev.ujhhgtg.wekit.utils.reflection.asClass
 import dev.ujhhgtg.wekit.utils.reflection.asResolver
+import dev.ujhhgtg.wekit.utils.reflection.dexKit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -371,20 +372,15 @@ object StickersSync : ClickableHookItem(), IResolvesDex {
             val retTypeCtor = retType.constructors[0]
             val retTypeInitArg2Type = retTypeCtor.parameters[2].type
             if (actualRetTypeInitArg2Type == null) {
-                actualRetTypeInitArg2Type = runBlocking {
-                    withContext(Dispatchers.IO) {
-                        DexKitBridge.create(HostInfo.appInfo.sourceDir).use { dexKit ->
-                            return@withContext dexKit.findClass {
-                                matcher {
-                                    addInterface(retTypeInitArg2Type.name)
-                                    addMethod {
-                                        paramTypes(ByteArray::class.java)
-                                    }
-                                }
-                            }[0]
+                actualRetTypeInitArg2Type =
+                    dexKit.findClass {
+                        matcher {
+                            addInterface(retTypeInitArg2Type.name)
+                            addMethod {
+                                paramTypes(ByteArray::class.java)
+                            }
                         }
-                    }
-                }.asClass
+                    }[0].asClass
             }
             result = retType.createInstance(
                 bytes, "image/png",

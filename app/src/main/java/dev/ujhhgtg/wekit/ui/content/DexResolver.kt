@@ -37,6 +37,7 @@ import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.WeLogger.exitProcess
 import dev.ujhhgtg.wekit.utils.android.copyToClipboard
 import dev.ujhhgtg.wekit.utils.android.showToast
+import dev.ujhhgtg.wekit.utils.reflection.dexKit
 import dev.ujhhgtg.wekit.utils.unreachable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +48,6 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.luckypray.dexkit.DexKitBridge
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -128,36 +128,33 @@ fun DexResolver(
         dialog.setCancelable(false)
         scope.launch {
             try {
-                val dexKit = withContext(Dispatchers.IO) { DexKitBridge.create(appInfo.sourceDir) }
-                dexKit.use { dexKit ->
-                    val progressChannel = Channel<ScanProgress>(Channel.UNLIMITED)
+                val progressChannel = Channel<ScanProgress>(Channel.UNLIMITED)
 
-                    // progress consumer on Main
-                    launch(Dispatchers.Main) {
-                        for (p in progressChannel) updateProgress(p)
-                    }
-
-                    // parallel scan — same flow/buffer/async structure
-                    val results = outdatedItems.asFlow()
-                        .map { item ->
-                            async(Dispatchers.IO) {
-                                scanItem(
-                                    item,
-                                    dexKit,
-                                    progressChannel
-                                )
-                            }
-                        }
-                        .buffer(8)
-                        .map { it.await() }
-                        .toList()
-
-                    progressChannel.close()
-
-                    val failed = results.filterIsInstance<ScanResult.Failed>()
-                    phase = DialogPhase.Done(failed)
-                    dialog.setCancelable(true)
+                // progress consumer on Main
+                launch(Dispatchers.Main) {
+                    for (p in progressChannel) updateProgress(p)
                 }
+
+                // parallel scan — same flow/buffer/async structure
+                val results = outdatedItems.asFlow()
+                    .map { item ->
+                        async(Dispatchers.IO) {
+                            scanItem(
+                                item,
+                                dexKit,
+                                progressChannel
+                            )
+                        }
+                    }
+                    .buffer(8)
+                    .map { it.await() }
+                    .toList()
+
+                progressChannel.close()
+
+                val failed = results.filterIsInstance<ScanResult.Failed>()
+                phase = DialogPhase.Done(failed)
+                dialog.setCancelable(true)
             } catch (e: Exception) {
                 WeLogger.e(TAG, "scanning failed", e)
                 phase = DialogPhase.Error("扫描过程中发生未知错误: ${e.message}")
