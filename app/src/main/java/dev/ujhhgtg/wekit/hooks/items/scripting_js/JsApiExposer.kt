@@ -12,6 +12,8 @@ import dev.ujhhgtg.wekit.utils.fs.KnownPaths
 import dev.ujhhgtg.wekit.utils.fs.createDirectoriesNoThrow
 import dev.ujhhgtg.wekit.utils.hookAfterDirectly
 import dev.ujhhgtg.wekit.utils.hookBeforeDirectly
+import dev.ujhhgtg.wekit.utils.reflection.asMethod
+import dev.ujhhgtg.wekit.utils.reflection.dexKit
 import dev.ujhhgtg.wekit.utils.serialization.DefaultJson
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -24,6 +26,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import org.luckypray.dexkit.result.ClassData
+import org.luckypray.dexkit.result.MethodData
 import org.mozilla.javascript.BaseFunction
 import org.mozilla.javascript.Context
 import org.mozilla.javascript.NativeArray
@@ -54,6 +58,7 @@ object JsApiExposer {
     private const val TAG_HTTP_API = "JsApiExposer.HttpApi"
     private const val TAG_XPOSED_API = "JsApiExposer.XposedApi"
     private const val TAG_REFLECT_API = "JsApiExposer.ReflectApi"
+    private const val TAG_DEXKIT_API = "JsApiExposer.DexKitApi"
 
     private val httpClient by lazy {
         OkHttpClient.Builder()
@@ -70,6 +75,7 @@ object JsApiExposer {
         exposeDateTimeApis(scope)
         exposeXposedApis(scope)
         exposeReflectApis(scope)
+        exposeDexKitApis(scope)
         exposeTaskApis(scope)
         exposeWeChatApis(scope, talker)
     }
@@ -1410,5 +1416,153 @@ object JsApiExposer {
         })
 
         ScriptableObject.putProperty(scope, "reflect", reflectObj)
+    }
+
+    // --- DexKit API ---
+
+    private fun getStringProperty(obj: NativeObject, key: String): String? {
+        val v = ScriptableObject.getProperty(obj, key)
+        return (v as? String)?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun getStringArrayProperty(obj: NativeObject, key: String): Array<String>? {
+        val v = ScriptableObject.getProperty(obj, key)
+        if (v !is NativeArray || v.length.toInt() == 0) return null
+        return (0 until v.length.toInt()).map { v[it]?.toString() ?: "" }.toTypedArray()
+    }
+
+    private fun getIntProperty(obj: NativeObject, key: String): Int? {
+        val v = ScriptableObject.getProperty(obj, key)
+        return (v as? Number)?.toInt()
+    }
+
+    private fun getNumberArrayProperty(obj: NativeObject, key: String): Array<Number>? {
+        val v = ScriptableObject.getProperty(obj, key)
+        if (v !is NativeArray || v.length.toInt() == 0) return null
+        val nums = (0 until v.length.toInt()).mapNotNull { v[it] as? Number }
+        if (nums.isEmpty()) return null
+        return nums.toTypedArray()
+    }
+
+    private fun createDexMethodsResult(
+        methodDataList: List<MethodData>,
+        cx: Context,
+        scope: Scriptable
+    ): NativeObject {
+        val result = NativeObject()
+        val methods = methodDataList.map { md ->
+            val method = md.asMethod
+            createJavaMethodObject(method, method.declaringClass.name, cx, scope)
+        }
+        val jsArray = cx.newArray(scope, methods.toTypedArray())
+        ScriptableObject.putProperty(result, "methods", jsArray)
+
+        ScriptableObject.putProperty(result, "single", object : BaseFunction() {
+            override fun call(
+                cx: Context,
+                scope: Scriptable,
+                thisObj: Scriptable,
+                args: Array<Any?>
+            ): Any? {
+                return when (methods.size) {
+                    1 -> methods[0]
+                    else -> Undefined.instance
+                }
+            }
+        })
+        return result
+    }
+
+    private fun createDexClassesResult(
+        classDataList: List<ClassData>,
+        cx: Context,
+        scope: Scriptable
+    ): NativeObject {
+        val result = NativeObject()
+        val names = classDataList.map { it.name }.toTypedArray()
+        val jsArray = cx.newArray(scope, names)
+        ScriptableObject.putProperty(result, "classes", jsArray)
+
+        ScriptableObject.putProperty(result, "single", object : BaseFunction() {
+            override fun call(
+                cx: Context,
+                scope: Scriptable,
+                thisObj: Scriptable,
+                args: Array<Any?>
+            ): Any? {
+                return when (names.size) {
+                    1 -> names[0]
+                    else -> Undefined.instance
+                }
+            }
+        })
+        return result
+    }
+
+    private fun exposeDexKitApis(scope: ScriptableObject) {
+        val dexkitObj = NativeObject()
+
+        ScriptableObject.putProperty(dexkitObj, "findMethods", object : BaseFunction() {
+            override fun call(
+                cx: Context,
+                scope: Scriptable,
+                thisObj: Scriptable,
+                args: Array<Any?>
+            ): Any? {
+                val searcher = args.getOrNull(0) as? NativeObject
+                    ?: return NativeObject()
+                return try {
+                    val results = dexKit.findMethod {
+                        val pkgs = getStringArrayProperty(searcher, "searchPackages")
+                        if (pkgs != null) searchPackages(*pkgs)
+                        matcher {
+                            getStringProperty(searcher, "declaringClass")?.let { declaredClass = it }
+                            getStringProperty(searcher, "name")?.let { name = it }
+                            getStringProperty(searcher, "returnType")?.let { returnType = it }
+                            getIntProperty(searcher, "paramCount")?.let { paramCount = it }
+                            getStringArrayProperty(searcher, "paramTypes")?.let { paramTypes(*it) }
+                            getStringArrayProperty(searcher, "usingEqStrings")?.let { usingEqStrings(*it) }
+                            getNumberArrayProperty(searcher, "usingNumbers")?.let { usingNumbers(*it) }
+                        }
+                    }
+                    createDexMethodsResult(results.toList(), cx, scope)
+                } catch (e: Exception) {
+                    WeLogger.e(TAG_DEXKIT_API, "dexkit.findMethods failed", e)
+                    createDexMethodsResult(emptyList(), cx, scope)
+                }
+            }
+        })
+
+        ScriptableObject.putProperty(dexkitObj, "findClasses", object : BaseFunction() {
+            override fun call(
+                cx: Context,
+                scope: Scriptable,
+                thisObj: Scriptable,
+                args: Array<Any?>
+            ): Any {
+                val searcher = args.getOrNull(0) as? NativeObject
+                    ?: return NativeObject()
+                return try {
+                    val results = dexKit.findClass {
+                        val pkgs = getStringArrayProperty(searcher, "searchPackages")
+                        if (pkgs != null) searchPackages(*pkgs)
+                        matcher {
+                            getStringProperty(searcher, "name")?.let { className = it }
+                            getStringProperty(searcher, "superclass")?.let { superClass = it }
+                            getStringArrayProperty(searcher, "usingEqStrings")?.let { usingEqStrings(*it) }
+                            getStringArrayProperty(searcher, "interfaces")?.forEach { ifaceName ->
+                                addInterface { className = ifaceName }
+                            }
+                        }
+                    }
+                    createDexClassesResult(results.toList(), cx, scope)
+                } catch (e: Exception) {
+                    WeLogger.e(TAG_DEXKIT_API, "dexkit.findClasses failed", e)
+                    createDexClassesResult(emptyList(), cx, scope)
+                }
+            }
+        })
+
+        ScriptableObject.putProperty(scope, "dexkit", dexkitObj)
     }
 }
