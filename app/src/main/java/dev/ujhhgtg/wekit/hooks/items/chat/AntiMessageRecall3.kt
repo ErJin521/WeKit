@@ -15,6 +15,7 @@ import dev.ujhhgtg.wekit.dexkit.abc.IResolvesDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.hooks.api.core.WeDatabaseApi
 import dev.ujhhgtg.wekit.hooks.api.core.WeMessageApi
+import dev.ujhhgtg.wekit.hooks.api.core.models.MessageType
 import dev.ujhhgtg.wekit.hooks.core.ClickableHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
@@ -85,7 +86,7 @@ object AntiMessageRecall3 : ClickableHookItem(), IResolvesDex {
                         val senderName = match?.groupValues?.get(2) ?: "未知"
                         val interceptNotice = "「$senderName」尝试撤回上一条消息 (已阻止)"
                         WeMessageApi.createSimpleMsgInfoAndInsert(
-                            10000,
+                            MessageType.SYSTEM.code,
                             talker,
                             interceptNotice,
                             createTime + 1

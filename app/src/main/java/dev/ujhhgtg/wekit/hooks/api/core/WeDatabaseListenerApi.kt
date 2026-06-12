@@ -2,7 +2,7 @@ package dev.ujhhgtg.wekit.hooks.api.core
 
 import android.annotation.SuppressLint
 import android.content.ContentValues
-import com.highcapable.kavaref.extension.VariousClass
+import com.highcapable.kavaref.extension.toClass
 import com.tencent.wcdb.database.SQLiteDatabase
 import dev.ujhhgtg.comptime.nameOf
 import dev.ujhhgtg.wekit.constants.Preferences
@@ -11,6 +11,7 @@ import dev.ujhhgtg.wekit.hooks.core.ApiHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
 import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
+import dev.ujhhgtg.wekit.utils.reflection.asResolver
 import dev.ujhhgtg.wekit.utils.reflection.resolve
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -23,7 +24,7 @@ object WeDatabaseListenerApi : ApiHookItem() {
     }
 
     fun interface IUpdateListener {
-        fun onUpdate(table: String, values: ContentValues): Boolean
+        fun onUpdate(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?, conflictAlgorithm: Int)
     }
 
     fun interface IQueryListener {
@@ -120,9 +121,10 @@ object WeDatabaseListenerApi : ApiHookItem() {
     // ==================== Update Hook ====================
 
     private fun hookDatabaseUpdate() {
-        val clsDb = VariousClass("com.tencent.wcdb.compat.SQLiteDatabase", "com.tencent.wcdb.database.SQLiteDatabase").load()
-
-        clsDb.resolve()
+        listOf(
+            "com.tencent.wcdb.compat.SQLiteDatabase","com.tencent.wcdb.database.SQLiteDatabase"
+        ).forEach { className ->
+            className.toClass().asResolver()
             .firstMethod {
                 name = "updateWithOnConflict"
                 parameters(
@@ -139,23 +141,18 @@ object WeDatabaseListenerApi : ApiHookItem() {
 
                     val table = args[0] as String
                     val values = args[1] as ContentValues
+                    val whereClause = args[2] as String?
+                    @Suppress("UNCHECKED_CAST")
+                    val whereArgs = args[3] as Array<String>?
+                    val conflictAlgorithm = args[4] as Int
 
                     logWithStack("Update", table, args)
 
-                    // 如果有任何一个监听器返回 true，则阻止更新
-                    val shouldBlock = updateListeners.any { it.onUpdate(table, values) }
-
-                    if (shouldBlock) {
-                        result = 0 // 返回0表示没有行被更新
-                        WeLogger.d(
-                            TAG,
-                            "[Update] 被监听器阻止, table=$table, stack=${WeLogger.getStackTraceString()}"
-                        )
-                    }
+                    updateListeners.forEach { it.onUpdate(table, values, whereClause, whereArgs, conflictAlgorithm) }
                 } catch (e: Throwable) {
-                    WeLogger.e(TAG, "Update dispatch failed", e)
+                    WeLogger.e(TAG, "update dispatch failed", e)
                 }
-            }
+            }}
     }
 
     // ==================== Query Hook ====================
@@ -163,8 +160,7 @@ object WeDatabaseListenerApi : ApiHookItem() {
     private fun hookDatabaseQuery() {
         val isPlay = HostInfo.isHostGooglePlay
         val version = HostInfo.versionCode
-        val isNewVersion = (!isPlay && version >= WeChatVersions.MM_8_0_43) ||
-                (isPlay && version >= WeChatVersions.MM_8_0_48_PLAY)
+        val isNewVersion = !isPlay && version >= WeChatVersions.MM_8_0_43 || isPlay && version >= WeChatVersions.MM_8_0_48_PLAY
 
         if (isNewVersion) {
             hookNewQueryMethod()

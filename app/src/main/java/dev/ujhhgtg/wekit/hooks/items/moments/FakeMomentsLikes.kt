@@ -84,14 +84,12 @@ object FakeMomentsLikes : SwitchHookItem(), WeMomentsContextMenuApi.IMenuItemsPr
         )
     }
 
-    override fun onUpdate(table: String, values: ContentValues): Boolean {
+    override fun onUpdate(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?, conflictAlgorithm: Int) {
         try {
             injectFakeLikes(table, values)
         } catch (e: Throwable) {
             WeLogger.e(TAG, "处理数据库更新异常", e)
         }
-
-        return false
     }
 
     private fun injectFakeLikes(tableName: String, values: ContentValues) = runCatching {

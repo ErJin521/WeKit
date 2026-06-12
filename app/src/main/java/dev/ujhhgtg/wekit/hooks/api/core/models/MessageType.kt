@@ -33,7 +33,6 @@ enum class MessageType(val code: Int) {
     MICRO_VIDEO(62),
     SYSTEM_NOTICE(9999),
 
-    @Deprecated("Use MessageType.isSystem()")
     SYSTEM(10000),
 
     @Deprecated("Use MessageType.isLocation()")

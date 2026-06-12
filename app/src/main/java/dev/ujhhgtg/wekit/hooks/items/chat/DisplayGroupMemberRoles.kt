@@ -59,7 +59,7 @@ object DisplayGroupMemberRoles : SwitchHookItem(), IResolvesDex,
                     name = "field_roomowner"
                     superclass()
                 }
-                .get()!! as String == sender
+                .get() as? String? == sender
 
             if (senderIsGroupOwner) return@getOrPut 1
 

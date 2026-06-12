@@ -1,7 +1,7 @@
 package dev.ujhhgtg.wekit.hooks.items.moments
 
 import android.content.ContentValues
-import dev.ujhhgtg.comptime.nameOf
+import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.wekit.hooks.api.core.WeDatabaseListenerApi
 import dev.ujhhgtg.wekit.hooks.api.net.WeProtoData
 import dev.ujhhgtg.wekit.hooks.core.HookItem
@@ -11,13 +11,11 @@ import dev.ujhhgtg.wekit.utils.WeLogger
 @HookItem(name = "拦截朋友圈删除", categories = ["朋友圈"], description = "拦截他人朋友圈删除并添加标记")
 object AntiMomentsDelete : SwitchHookItem(), WeDatabaseListenerApi.IUpdateListener {
 
-    private val TAG = nameOf(AntiMomentsDelete)
+    private val TAG = This.Class.simpleName
     private const val TBL_SNS_INFO = "SnsInfo"
     private const val DEFAULT_MARK = "[拦截删除]"
 
-    override fun onUpdate(table: String, values: ContentValues): Boolean {
-        if (!isEnabled) return false
-
+    override fun onUpdate(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?, conflictAlgorithm: Int) {
         try {
             when (table) {
                 TBL_SNS_INFO -> handleSnsRecord(values)
@@ -25,7 +23,6 @@ object AntiMomentsDelete : SwitchHookItem(), WeDatabaseListenerApi.IUpdateListen
         } catch (ex: Throwable) {
             WeLogger.e(TAG, "拦截处理异常", ex)
         }
-        return false
     }
 
     override fun onEnable() {
