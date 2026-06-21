@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -32,12 +33,14 @@ import dev.ujhhgtg.wekit.hooks.api.core.models.IWeContact
 import dev.ujhhgtg.wekit.hooks.api.ui.WeStartActivityApi
 import dev.ujhhgtg.wekit.hooks.core.ClickableHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
+import dev.ujhhgtg.wekit.hooks.items.contacts.CustomLocalFriendAvatars
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
 import dev.ujhhgtg.wekit.ui.content.ContactsSelector
 import dev.ujhhgtg.wekit.ui.content.TextButton
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
+import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
 import org.json.JSONArray
@@ -45,7 +48,7 @@ import org.json.JSONObject
 import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Modifier as JavaModifier
 
-@HookItem(name = "对话归拢", categories = ["聊天"], description = "将多个对话归拢在一个文件夹内")
+@HookItem(name = "对话归拢", categories = ["聊天"], description = "将多个对话归拢在一个文件夹内，设置对话头像时请同时打开自定义好友头像")
 object AggregateChats : ClickableHookItem(),
     WeDatabaseListenerApi.IQueryListener,
     WeStartActivityApi.IStartActivityListener,
@@ -403,6 +406,10 @@ object AggregateChats : ClickableHookItem(),
                 "DELETE FROM ${ContactTable.NAME} WHERE ${ContactTable.USERNAME} LIKE ?",
                 arrayOf("$prefix%")
             )
+            WeDatabaseApi.execStatement(
+                "DELETE FROM img_flag WHERE username LIKE ?",
+                arrayOf("$prefix%")
+            )
         }
     }
 
@@ -423,6 +430,14 @@ object AggregateChats : ClickableHookItem(),
             VALUES (?, ?, 3, 0)
             """.trimIndent(),
             arrayOf(folder.id, folder.name)
+        )
+
+        WeDatabaseApi.execStatement(
+            """
+            REPLACE INTO img_flag (username, imgflag, lastupdatetime, reserved1, reserved2)
+            VALUES (?, 3, ?, 0, ?)
+            """.trimIndent(),
+            arrayOf(folder.id, System.currentTimeMillis() / 1000, "http://wekit.local/avatar/${folder.id}")
         )
 
         val summary = readFolderSummary(members)
@@ -737,6 +752,7 @@ object AggregateChats : ClickableHookItem(),
         onDelete: (() -> Unit)? = null,
         onSave: (ChatFolder) -> Unit
     ) {
+        val folderId = remember(folder) { folder?.id ?: newFolderId() }
         var name by remember(folder) { mutableStateOf(folder?.name ?: "") }
         var members by remember(folder) { mutableStateOf(folder?.members?.toSet().orEmpty()) }
         var selectingMembers by remember { mutableStateOf(false) }
@@ -770,8 +786,28 @@ object AggregateChats : ClickableHookItem(),
                         singleLine = true
                     )
                     Text("已选择 ${members.size} 个对话")
-                    Button(onClick = { selectingMembers = true }) {
-                        Text("选择对话")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            onClick = { selectingMembers = true }
+                        ) {
+                            Text("选择对话")
+                        }
+
+                        val hasAvatar = CustomLocalFriendAvatars.avatarMap.containsKey(folderId)
+                        if (hasAvatar) {
+                            Button(onClick = { CustomLocalFriendAvatars.removeAvatar(folderId) }) {
+                                Text("清除头像")
+                            }
+                        }
+                        Button(onClick = {
+                            CustomLocalFriendAvatars.selectAvatarImage(HostInfo.application, folderId)
+                        }) {
+                            Text(if (hasAvatar) "更换头像" else "设置头像")
+                        }
                     }
                 }
             },
@@ -786,7 +822,7 @@ object AggregateChats : ClickableHookItem(),
                     enabled = name.isNotBlank(),
                     onClick = {
                         val next = ChatFolder(
-                            id = folder?.id ?: newFolderId(),
+                            id = folderId,
                             name = name.trim(),
                             members = members.toList().sorted()
                         )

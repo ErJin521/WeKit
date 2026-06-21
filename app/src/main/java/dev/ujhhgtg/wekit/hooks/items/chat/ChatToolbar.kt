@@ -13,16 +13,23 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ComposeView
@@ -31,6 +38,8 @@ import androidx.core.view.children
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Account_box
+import com.composables.icons.materialsymbols.outlined.Arrow_downward
+import com.composables.icons.materialsymbols.outlined.Arrow_upward
 import com.composables.icons.materialsymbols.outlined.Attach_file
 import com.composables.icons.materialsymbols.outlined.Attach_money
 import com.composables.icons.materialsymbols.outlined.Camera
@@ -49,14 +58,19 @@ import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import dev.ujhhgtg.comptime.This
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
+import dev.ujhhgtg.wekit.hooks.core.ClickableHookItem
 import dev.ujhhgtg.wekit.hooks.core.HookItem
-import dev.ujhhgtg.wekit.hooks.core.SwitchHookItem
+import dev.ujhhgtg.wekit.preferences.WePrefs
+import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
+import dev.ujhhgtg.wekit.ui.content.Button
+import dev.ujhhgtg.wekit.ui.content.TextButton
 import dev.ujhhgtg.wekit.ui.utils.AppTheme
 import dev.ujhhgtg.wekit.ui.utils.LifecycleOwnerProvider
 import dev.ujhhgtg.wekit.ui.utils.findViewByChildIndexes
 import dev.ujhhgtg.wekit.ui.utils.findViewWhich
 import dev.ujhhgtg.wekit.ui.utils.iterable
 import dev.ujhhgtg.wekit.ui.utils.setLifecycleOwner
+import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.now
 import dev.ujhhgtg.reflekt.reflekt
@@ -65,10 +79,28 @@ import org.luckypray.dexkit.DexKitBridge
 import kotlin.time.Duration.Companion.seconds
 
 @SuppressLint("StaticFieldLeak")
-@HookItem(name = "聊天工具栏", categories = ["聊天"], description = "在输入框上方添加工具栏")
-object ChatToolbar : SwitchHookItem(), IResolveDex {
+@HookItem(name = "聊天工具栏", categories = ["聊天"], description = "在输入框上方添加工具栏 (点击配置)")
+object ChatToolbar : ClickableHookItem(), IResolveDex {
 
     private val TAG = This.Class.simpleName
+
+    private val NAME_TO_ICON_MAP = mapOf(
+        "相册" to MaterialSymbols.Outlined.Photo_library,
+        "拍摄" to MaterialSymbols.Outlined.Camera,
+        "系统拍摄" to MaterialSymbols.Outlined.Camera,
+        "视频通话" to MaterialSymbols.Outlined.Video_chat,
+        "语音通话" to MaterialSymbols.Outlined.Voice_chat,
+        "位置" to MaterialSymbols.Outlined.Location_on,
+        "红包" to MaterialSymbols.Outlined.Mail,
+        "礼物" to MaterialSymbols.Outlined.Redeem,
+        "转账" to MaterialSymbols.Outlined.Attach_money,
+        "语音输入" to MaterialSymbols.Outlined.Mic,
+        "收藏" to MaterialSymbols.Outlined.Favorite,
+        "接龙" to MaterialSymbols.Outlined.Format_list_numbered,
+        "文件" to MaterialSymbols.Outlined.Attach_file,
+        "名片" to MaterialSymbols.Outlined.Account_box,
+        "音乐" to MaterialSymbols.Outlined.Music_note
+    )
 
     private val methodAppPanelInitAppGrid by dexMethod()
     private val methodAppPanelOnMeasure by dexMethod()
@@ -87,6 +119,9 @@ object ChatToolbar : SwitchHookItem(), IResolveDex {
     )
 
     private val toolsState = MutableStateFlow<List<Pair<String, MenuItem>>>(emptyList())
+
+    private var itemsOrder by WePrefs.prefOption("chat_toolbar_order", NAME_TO_ICON_MAP.keys.joinToString(","))
+    private var enabledItems by WePrefs.prefOption("chat_toolbar_enabled_items", NAME_TO_ICON_MAP.keys)
 
     override fun onEnable() {
         methodAppPanelInitAppGrid.apply {
@@ -169,50 +204,61 @@ object ChatToolbar : SwitchHookItem(), IResolveDex {
                         AppTheme {
                             val tools by toolsState.collectAsStateWithLifecycle()
 
-                            val visibleItems = remember(tools) {
-                                tools.filter { NAME_TO_ICON_MAP.containsKey(it.first) }
+                            val allItems = remember(tools) {
+                                val list = mutableListOf<Pair<String, () -> Unit>>()
+                                if (tools.isNotEmpty()) {
+                                    val firstTool = tools[0].second
+                                    list.add("相册" to {
+                                        firstTool.onClickListener.onItemClick(
+                                            firstTool.gridView,
+                                            firstTool.itemView,
+                                            0,
+                                            0
+                                        )
+                                    })
+                                    list.add("系统拍摄" to {
+                                        firstTool.onLongClickListener.onItemLongClick(
+                                            null,
+                                            null,
+                                            0,
+                                            0
+                                        )
+                                    })
+
+                                    tools.forEach { (name, menuItem) ->
+                                        if (name in NAME_TO_ICON_MAP && name != "相册" && name != "系统拍摄") {
+                                            list.add(name to {
+                                                menuItem.onClickListener.onItemClick(
+                                                    menuItem.gridView,
+                                                    menuItem.itemView,
+                                                    menuItem.indexInGrid + 1,
+                                                    0
+                                                )
+                                            })
+                                        }
+                                    }
+                                }
+                                list
+                            }
+
+                            val order = itemsOrder.split(",").filter { it.isNotEmpty() }
+                            val enabled = enabledItems
+
+                            val sortedVisibleItems = remember(allItems, itemsOrder, enabledItems) {
+                                allItems.filter { it.first in enabled }
+                                    .sortedBy { item ->
+                                        val idx = order.indexOf(item.first)
+                                        if (idx == -1) Int.MAX_VALUE else idx
+                                    }
                             }
 
                             LazyRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 contentPadding = PaddingValues(horizontal = 8.dp),
                             ) {
-                                // workaround for weird WeChat bug where 'Album' doesn't display, so I have to render it manually
-
-                                item {
-                                    FeatureChip("相册", MaterialSymbols.Outlined.Photo_library) {
-                                        tools[0].second.let {
-                                            it.onClickListener.onItemClick(
-                                                it.gridView,
-                                                it.itemView,
-                                                0,
-                                                0
-                                            )
-                                        }
-                                    }
-                                }
-
-                                item {
-                                    FeatureChip("系统拍摄", MaterialSymbols.Outlined.Camera) {
-                                        tools[0].second.onLongClickListener.onItemLongClick(
-                                            null,
-                                            null,
-                                            0,
-                                            0
-                                        )
-                                    }
-                                }
-
-                                items(visibleItems, key = { it.first }) {
-                                    val icon = NAME_TO_ICON_MAP[it.first]!!
-                                    FeatureChip(it.first, icon) {
-                                        it.second.onClickListener.onItemClick(
-                                            it.second.gridView,
-                                            it.second.itemView,
-                                            it.second.indexInGrid + 1,
-                                            0
-                                        )
-                                    }
+                                items(sortedVisibleItems, key = { it.first }) { (name, onClick) ->
+                                    val icon = NAME_TO_ICON_MAP[name]!!
+                                    FeatureChip(name, icon, onClick)
                                 }
                             }
                         }
@@ -221,21 +267,76 @@ object ChatToolbar : SwitchHookItem(), IResolveDex {
             }
     }
 
-    private val NAME_TO_ICON_MAP = mapOf(
-        "拍摄" to MaterialSymbols.Outlined.Camera,
-        "视频通话" to MaterialSymbols.Outlined.Video_chat,
-        "语音通话" to MaterialSymbols.Outlined.Voice_chat,
-        "位置" to MaterialSymbols.Outlined.Location_on,
-        "红包" to MaterialSymbols.Outlined.Mail,
-        "礼物" to MaterialSymbols.Outlined.Redeem,
-        "转账" to MaterialSymbols.Outlined.Attach_money,
-        "语音输入" to MaterialSymbols.Outlined.Mic,
-        "收藏" to MaterialSymbols.Outlined.Favorite,
-        "接龙" to MaterialSymbols.Outlined.Format_list_numbered,
-        "文件" to MaterialSymbols.Outlined.Attach_file,
-        "名片" to MaterialSymbols.Outlined.Account_box,
-        "音乐" to MaterialSymbols.Outlined.Music_note
-    )
+    override fun onClick(context: Context) {
+        showComposeDialog(context) {
+            val currentOrder = remember {
+                val order = itemsOrder.split(",").filter { it.isNotEmpty() }.toMutableStateList()
+                NAME_TO_ICON_MAP.keys.forEach { if (it !in order) order.add(it) }
+                order
+            }
+            val currentEnabled = remember { enabledItems.toMutableStateList() }
+
+            AlertDialogContent(
+                title = { Text("聊天工具栏配置") },
+                text = {
+                    LazyColumn(modifier = Modifier.size(height = 400.dp, width = 300.dp)) {
+                        itemsIndexed(currentOrder) { index, name ->
+                            ListItem(
+                                headlineContent = { Text(name) },
+                                leadingContent = {
+                                    NAME_TO_ICON_MAP[name]?.let { icon ->
+                                        Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+                                    }
+                                },
+                                trailingContent = {
+                                    Row {
+                                        IconButton(onClick = {
+                                            if (index > 0) {
+                                                val temp = currentOrder[index]
+                                                currentOrder[index] = currentOrder[index - 1]
+                                                currentOrder[index - 1] = temp
+                                            }
+                                        }, enabled = index > 0) {
+                                            Icon(MaterialSymbols.Outlined.Arrow_upward, contentDescription = "Up")
+                                        }
+                                        IconButton(onClick = {
+                                            if (index < currentOrder.size - 1) {
+                                                val temp = currentOrder[index]
+                                                currentOrder[index] = currentOrder[index + 1]
+                                                currentOrder[index + 1] = temp
+                                            }
+                                        }, enabled = index < currentOrder.size - 1) {
+                                            Icon(MaterialSymbols.Outlined.Arrow_downward, contentDescription = "Down")
+                                        }
+                                        Switch(
+                                            checked = name in currentEnabled,
+                                            onCheckedChange = { checked ->
+                                                if (checked) currentEnabled.add(name) else currentEnabled.remove(name)
+                                            }
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        itemsOrder = currentOrder.joinToString(",")
+                        enabledItems = currentEnabled.toSet()
+                        onDismiss()
+                    }) {
+                        Text("确定")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
+    }
 
     override fun resolveDex(dexKit: DexKitBridge) {
         methodAppPanelInitAppGrid.find(dexKit) {

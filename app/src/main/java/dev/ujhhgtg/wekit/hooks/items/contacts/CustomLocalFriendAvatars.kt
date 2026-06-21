@@ -86,6 +86,7 @@ import dev.ujhhgtg.wekit.utils.reflection.BString
 import dev.ujhhgtg.wekit.utils.reflection.DexKit
 import dev.ujhhgtg.wekit.utils.reflection.bool
 import kotlinx.serialization.json.Json
+import org.luckypray.dexkit.DexKitBridge
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.Collections
@@ -111,87 +112,23 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
     private val avatarMapFile = KnownPaths.moduleData / "custom_avatars_map.json"
 
     // ji1.s
-    private val classAvatarGetContactServiceHelper by dexClass {
-        matcher {
-            usingEqStrings("MicroMsg.AvatarGetContactServiceHelper", "put stack into pool: ")
-        }
-    }
+    private val classAvatarGetContactServiceHelper by dexClass()
 
     // ji1.s.og, most of com.tencent.mm.feature.avatar.w calls this,
     // e.g. Cg, ig, cg, og, rg
-    private val methodMvvmLoadAvatar1 by dexMethod {
-        matcher {
-            declaredClass(classAvatarGetContactServiceHelper.clazz)
-            paramTypes(
-                "android.widget.ImageView",
-                "java.lang.String",
-                "java.lang.String",
-                "float"
-            )
-            returnType(Void.TYPE)
-            usingEqStrings("MicroMsg.AvatarGetContactServiceHelper", "put stack into pool: ")
-        }
-    }
+    private val methodMvvmLoadAvatar1 by dexMethod()
 
     // ji1.s.pg: another exception
-    private val methodMvvmLoadAvatar2 by dexMethod {
-        matcher {
-            declaredClass(classAvatarGetContactServiceHelper.clazz)
-            usingEqStrings("imageView")
-            paramTypes(
-                "android.widget.ImageView",
-                "java.lang.String",
-            )
-            returnType(Void.TYPE)
-            usingNumbers(30000)
-        }
-    }
+    private val methodMvvmLoadAvatar2 by dexMethod()
 
     // com.tencent.mm.feature.avatar.w.pg; an exception: this doesn't call methodMvvmLoadAvatar
-    private val methodFeatureAvatarSimple1 by dexMethod {
-        // com.tencent.mm.feature.avatar.w
-        val avatarDrawableClass = DexKit.findClass {
-            searchPackages("com.tencent.mm.feature.avatar")
-            matcher {
-                usingEqStrings("MicroMsg.AvatarDrawable", "imageView is null", "?access_token=")
-            }
-        }.single().name
+    private val methodFeatureAvatarSimple1 by dexMethod()
 
-        matcher {
-            declaredClass = avatarDrawableClass
-            paramTypes(
-                "android.widget.ImageView",
-                "java.lang.String"
-            )
-            returnType(Void.TYPE)
+    private val methodPluginsdkLoadAvatar by dexMethod()
 
-            addInvoke {
-                declaredClass = "android.view.View"
-                name = "invalidate"
-            }
-        }
-    }
+    private val methodHdGallerySetUsername by dexMethod()
 
-    private val methodHdGallerySetUsername by dexMethod {
-        matcher {
-            declaredClass = "com.tencent.mm.plugin.setting.ui.setting.view.GetHdHeadImageGalleryView"
-            name = "setUsername"
-            paramTypes("java.lang.String")
-            returnType(Void.TYPE)
-        }
-    }
-
-    private val methodRoundBitmap by dexMethod {
-        searchPackages("com.tencent.mm.sdk.platformtools")
-        matcher {
-            paramTypes("android.graphics.Bitmap", "boolean", "float")
-            returnType = "android.graphics.Bitmap"
-
-            addInvoke {
-                usingEqStrings("MicroMsg.BitmapUtil", "getRoundedCornerBitmap in bitmap is null")
-            }
-        }
-    }
+    private val methodRoundBitmap by dexMethod()
 
     @Volatile
     private var avatarMapCache: Map<String, String>? = null
@@ -208,7 +145,7 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
     private lateinit var hdGalleryAdapterField: Field
     private lateinit var hdGallerySetAdapterMethod: Method
 
-    private var avatarMap: Map<String, String>
+    var avatarMap: Map<String, String>
         get() = avatarMapCache ?: loadAvatarMap().also { avatarMapCache = it }
         set(value) {
             val normalized = value
@@ -220,6 +157,117 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
             saveAvatarMap(normalized)
         }
 
+    override fun resolveDex(dexKit: DexKitBridge) {
+        classAvatarGetContactServiceHelper.find(dexKit) {
+            matcher {
+                usingEqStrings("MicroMsg.AvatarGetContactServiceHelper", "put stack into pool: ")
+            }
+        }
+
+        methodMvvmLoadAvatar1.find(dexKit) {
+            matcher {
+                declaredClass(classAvatarGetContactServiceHelper.clazz)
+                paramTypes(
+                    "android.widget.ImageView",
+                    "java.lang.String",
+                    "java.lang.String",
+                    "float"
+                )
+                returnType(Void.TYPE)
+                usingEqStrings("MicroMsg.AvatarGetContactServiceHelper", "put stack into pool: ")
+            }
+        }
+
+        methodMvvmLoadAvatar2.find(dexKit) {
+            matcher {
+                declaredClass(classAvatarGetContactServiceHelper.clazz)
+                usingEqStrings("imageView")
+                paramTypes(
+                    "android.widget.ImageView",
+                    "java.lang.String",
+                )
+                returnType(Void.TYPE)
+                usingNumbers(30000)
+            }
+        }
+
+        methodFeatureAvatarSimple1.find(dexKit) {
+            // com.tencent.mm.feature.avatar.w
+            val avatarDrawableClass = DexKit.findClass {
+                searchPackages("com.tencent.mm.feature.avatar")
+                matcher {
+                    usingEqStrings("MicroMsg.AvatarDrawable", "imageView is null", "?access_token=")
+                }
+            }.single().name
+
+            matcher {
+                declaredClass = avatarDrawableClass
+                paramTypes(
+                    "android.widget.ImageView",
+                    "java.lang.String"
+                )
+                returnType(Void.TYPE)
+
+                addInvoke {
+                    declaredClass = "android.view.View"
+                    name = "invalidate"
+                }
+            }
+        }
+
+        methodPluginsdkLoadAvatar.find(dexKit, allowFailure = true) {
+            searchPackages("com.tencent.mm.pluginsdk.ui")
+            matcher {
+                paramTypes(
+                    "android.widget.ImageView",
+                    "java.lang.String"
+                )
+                returnType(Void.TYPE)
+                usingEqStrings("MicroMsg.AvatarDrawable")
+            }
+        }
+
+        methodHdGallerySetUsername.find(dexKit) {
+            matcher {
+                declaredClass = "com.tencent.mm.plugin.setting.ui.setting.view.GetHdHeadImageGalleryView"
+                name = "setUsername"
+                paramTypes("java.lang.String")
+                returnType(Void.TYPE)
+            }
+        }
+
+        methodRoundBitmap.find(dexKit) {
+            searchPackages("com.tencent.mm.sdk.platformtools")
+            matcher {
+                paramTypes("android.graphics.Bitmap", "boolean", "float")
+                returnType = "android.graphics.Bitmap"
+
+                addInvoke {
+                    usingEqStrings("MicroMsg.BitmapUtil", "getRoundedCornerBitmap in bitmap is null")
+                }
+            }
+        }
+
+        methodConversationAvatar.find(dexKit) {
+            searchPackages("com.tencent.mm.pluginsdk.ui")
+            matcher {
+                usingEqStrings("MicroMsg.AvatarDrawable", "imageView is null")
+                paramTypes(
+                    "android.widget.ImageView",
+                    "java.lang.String",
+                    "float",
+                    "boolean"
+                )
+                returnType = "void"
+
+                addInvoke {
+                    declaredClass = "android.view.View"
+                    name = "invalidate"
+                }
+            }
+        }
+    }
+
     override fun onEnable() {
         WeContactPrefsScreenApi.addProvider(this)
 
@@ -227,7 +275,8 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
             methodConversationAvatar,
             methodMvvmLoadAvatar1,
             methodMvvmLoadAvatar2,
-            methodFeatureAvatarSimple1
+            methodFeatureAvatarSimple1,
+            methodPluginsdkLoadAvatar
         ).forEach { it.method.hookBefore {
             val imageView = args.getOrNull(0) as? ImageView ?: return@hookBefore
             val wxId = args.getOrNull(1) as? String ?: return@hookBefore
@@ -303,24 +352,7 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
     }
 
     // com.tencent.mm.pluginsdk.ui.u.b
-    private val methodConversationAvatar by dexMethod {
-        searchPackages("com.tencent.mm.pluginsdk.ui")
-        matcher {
-            usingEqStrings("MicroMsg.AvatarDrawable", "imageView is null")
-            paramTypes(
-                "android.widget.ImageView",
-                "java.lang.String",
-                "float",
-                "boolean"
-            )
-            returnType = "void"
-
-            addInvoke {
-                declaredClass = "android.view.View"
-                name = "invalidate"
-            }
-        }
-    }
+    private val methodConversationAvatar by dexMethod()
 
     private fun applyCustomAvatar(imageView: ImageView, username: String, radiusFactor: Float): Boolean {
         val uri = avatarMap[username]?.takeIf { it.isNotBlank() } ?: return false
@@ -342,7 +374,14 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
             .takeIf { it > 0 }
             ?: imageView.layoutParams?.width?.takeIf { it > 0 }
             ?: 156
-        val bitmap = decodeAvatarBitmap(uri, targetSize, round = true, radiusFactor = radiusFactor) ?: run {
+
+        val shouldRound = RoundAvatars.isEnabled
+        val bitmap = decodeAvatarBitmap(
+            uri = uri,
+            targetSize = targetSize,
+            round = shouldRound,
+            radiusFactor = if (shouldRound) radiusFactor else 0f
+        ) ?: run {
             imageView.load(uri) {
                 allowHardware(false)
                 crossfade(false)
@@ -518,7 +557,7 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
         }
     }
 
-    private fun selectAvatarImage(context: Context, wxId: String) {
+    fun selectAvatarImage(context: Context, wxId: String) {
         TransparentActivity.launch(context) {
             val launcher = registerForActivityResult(
                 ActivityResultContracts.PickVisualMedia()
@@ -553,7 +592,7 @@ object CustomLocalFriendAvatars : ClickableHookItem(), IContactInfoProvider, IRe
         clearBitmapCaches()
     }
 
-    private fun removeAvatar(wxId: String) {
+    fun removeAvatar(wxId: String) {
         avatarMap = avatarMap - wxId
         clearBitmapCaches()
     }
