@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.view.MotionEvent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,11 +19,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -33,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.composables.icons.materialsymbols.MaterialSymbols
@@ -45,10 +53,11 @@ import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.BitmapPool
 import org.osmdroid.tileprovider.tilesource.ITileSource
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
-import org.osmdroid.util.MapTileIndex
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.util.RectL
 import org.osmdroid.views.MapView
 import org.osmdroid.views.MapViewRepository
@@ -111,7 +120,7 @@ fun tiandituTileSource(apiKey: String): ITileSource = object : OnlineTileSourceB
 fun OsmLocationPicker(
     initialLocation: GeoPoint = GeoPoint(31.224361, 121.469170), // Shanghai
     initialZoom: Double = 5.0,
-    tileSource: ITileSource = CHINA_OSM_TILE_SOURCE,
+    tileSource: ITileSource = TileSourceFactory.MAPNIK,
     onLocationSelected: (GeoPoint) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -121,9 +130,11 @@ fun OsmLocationPicker(
     }
 
     var pickedPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var showManualDialog by remember { mutableStateOf(false) }
 
-    // Hold a stable reference so overlays can be mutated without recomposing
+    // Stable references for the map and custom marker
     val markerRef = remember { mutableStateOf<CustomOsmMarker?>(null) }
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
     Surface(
         modifier = Modifier
@@ -152,6 +163,7 @@ fun OsmLocationPicker(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
                         MapView(ctx).apply {
+                            mapViewRef = this
                             setTileSource(tileSource)
                             setMultiTouchControls(true)
                             controller.setZoom(initialZoom)
@@ -159,13 +171,11 @@ fun OsmLocationPicker(
                             minZoomLevel = 3.0
                             maxZoomLevel = 19.0
 
-                            // Tap-to-pin overlay
                             val eventsOverlay = MapEventsOverlay(
                                 object : MapEventsReceiver {
                                     override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
                                         pickedPoint = p
 
-                                        // Move existing marker or create a new one
                                         val existing = markerRef.value
                                         if (existing != null) {
                                             existing.position = p
@@ -184,13 +194,10 @@ fun OsmLocationPicker(
                                     override fun longPressHelper(p: GeoPoint) = false
                                 }
                             )
-                            // Add events overlay FIRST so it's hit-tested last
-                            // (osmdroid overlays are drawn/consumed in reverse order)
                             overlays.add(0, eventsOverlay)
                         }
                     },
                     update = { mapView ->
-                        // Re-apply tile source if it changes (e.g. on recomposition)
                         if (mapView.tileProvider.tileSource != tileSource) {
                             mapView.setTileSource(tileSource)
                         }
@@ -207,7 +214,7 @@ fun OsmLocationPicker(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
                     ) {
                         Text(
-                            text = "点击地图以选择虚拟位置",
+                            text = "点击地图或下方坐标以选择虚拟位置",
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         )
@@ -215,12 +222,43 @@ fun OsmLocationPicker(
                 }
             }
 
-            // ── Coordinate readout ────────────────────────────────────
-            pickedPoint?.let { pt ->
-                HorizontalDivider()
-                OsmCoordinateReadout(point = pt)
-            }
+            // ── Coordinate readout (Always visible) ────────────────────
+            HorizontalDivider()
+            OsmCoordinateReadout(
+                point = pickedPoint,
+                onClick = { showManualDialog = true }
+            )
         }
+    }
+
+    // ── Manual Input Dialog ───────────────────────────────────────────
+    if (showManualDialog) {
+        ManualCoordinateDialog(
+            initialPoint = pickedPoint,
+            onDismiss = { showManualDialog = false },
+            onConfirm = { lat, lng ->
+                showManualDialog = false
+                val newPoint = GeoPoint(lat, lng)
+                pickedPoint = newPoint
+
+                // Update Map View and Marker programmatically
+                mapViewRef?.let { mv ->
+                    val existing = markerRef.value
+                    if (existing != null) {
+                        existing.position = newPoint
+                    } else {
+                        val m = CustomOsmMarker(mv).apply {
+                            position = newPoint
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        }
+                        mv.overlays.add(m)
+                        markerRef.value = m
+                    }
+                    mv.controller.animateTo(newPoint)
+                    mv.invalidate()
+                }
+            }
+        )
     }
 }
 
@@ -263,21 +301,37 @@ private fun OsmPickerHeader(
 }
 
 @Composable
-private fun OsmCoordinateReadout(point: GeoPoint) {
+private fun OsmCoordinateReadout(
+    point: GeoPoint?,
+    onClick: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        OsmCoordinateChip(label = "纬度", value = "%.6f".format(point.latitude))
-        OsmCoordinateChip(label = "经度", value = "%.6f".format(point.longitude))
+        OsmCoordinateChip(
+            label = "纬度",
+            value = point?.let { "%.6f".format(it.latitude) } ?: "N/A",
+            onClick = onClick
+        )
+        OsmCoordinateChip(
+            label = "经度",
+            value = point?.let { "%.6f".format(it.longitude) } ?: "N/A",
+            onClick = onClick
+        )
     }
 }
 
 @Composable
-private fun OsmCoordinateChip(label: String, value: String) {
+private fun OsmCoordinateChip(
+    label: String,
+    value: String,
+    onClick: () -> Unit
+) {
     Surface(
+        modifier = Modifier.clickable(onClick = onClick),
         shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.secondaryContainer,
     ) {
@@ -301,6 +355,80 @@ private fun OsmCoordinateChip(label: String, value: String) {
     }
 }
 
+@Composable
+private fun ManualCoordinateDialog(
+    initialPoint: GeoPoint?,
+    onConfirm: (Double, Double) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var latText by remember { mutableStateOf(initialPoint?.latitude?.toString() ?: "") }
+    var lngText by remember { mutableStateOf(initialPoint?.longitude?.toString() ?: "") }
+
+    var latError by remember { mutableStateOf(false) }
+    var lngError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("手动输入坐标") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = latText,
+                    onValueChange = {
+                        latText = it
+                        val lat = it.toDoubleOrNull()
+                        latError = lat == null || lat !in -90.0..90.0
+                    },
+                    label = { Text("纬度 (-90 ~ 90)") },
+                    isError = latError,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = lngText,
+                    onValueChange = {
+                        lngText = it
+                        val lng = it.toDoubleOrNull()
+                        lngError = lng == null || lng !in -180.0..180.0
+                    },
+                    label = { Text("经度 (-180 ~ 180)") },
+                    isError = lngError,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val lat = latText.toDoubleOrNull()
+                    val lng = lngText.toDoubleOrNull()
+
+                    val isLatValid = lat != null && lat in -90.0..90.0
+                    val isLngValid = lng != null && lng in -180.0..180.0
+
+                    latError = !isLatValid
+                    lngError = !isLngValid
+
+                    if (isLatValid && isLngValid) {
+                        onConfirm(lat, lng)
+                    }
+                }
+            ) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+// ── CustomMarker Implementation ────────────────────────────────────────────────
 private class CustomOsmMarker(mapView: MapView) : Overlay() {
     private var mIcon: Drawable? = null
     private var mPosition: GeoPoint?
@@ -426,7 +554,6 @@ private class CustomOsmMarker(mapView: MapView) : Overlay() {
         val touched = hitTest(event)
         if (touched) {
             if (mDraggable) {
-                //starts dragging mode:
                 mIsDragged = true
                 if (mOnMarkerDragListener != null) mOnMarkerDragListener!!.onMarkerDragStart(this)
                 moveToEventPosition(event, mapView)
@@ -461,9 +588,7 @@ private class CustomOsmMarker(mapView: MapView) : Overlay() {
 
     interface OnMarkerDragListener {
         fun onMarkerDrag(marker: CustomOsmMarker?)
-
         fun onMarkerDragEnd(marker: CustomOsmMarker?)
-
         fun onMarkerDragStart(marker: CustomOsmMarker?)
     }
 
