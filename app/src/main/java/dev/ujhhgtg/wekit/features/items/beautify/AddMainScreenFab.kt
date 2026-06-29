@@ -63,6 +63,7 @@ import com.composables.icons.materialsymbols.outlinedfilled.Settings
 import com.composables.icons.materialsymbols.outlinedfilled.Update
 import com.composables.icons.materialsymbols.outlinedfilled.Wallet
 import dev.ujhhgtg.comptime.This
+import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.wekit.features.api.core.WeConversationApi
 import dev.ujhhgtg.wekit.features.api.ui.WeMainActivityBeautifyApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
@@ -79,7 +80,6 @@ import dev.ujhhgtg.wekit.ui.utils.setLifecycleOwner
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
-import dev.ujhhgtg.reflekt.reflekt
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
@@ -143,7 +143,7 @@ object AddMainScreenFab : ClickableFeature() {
         FabItemConfig("4", FabType.START_ACTIVITY, "视频号", "Movie", "com.tencent.mm.plugin.finder.ui.FinderHomeAffinityUI"),
         FabItemConfig("5", FabType.START_ACTIVITY, "设置", "Settings", "com.tencent.mm.plugin.setting.ui.setting_new.MainSettingsUI"),
         FabItemConfig("6", FabType.MODULE_SETTINGS, "模块设置", "Extension"),
-        FabItemConfig("7", FabType.FORCE_STOP, "强制停止", "Cancel"),
+        FabItemConfig("7", FabType.FORCE_STOP, "强行停止", "Cancel"),
         FabItemConfig("8", FabType.MARK_ALL_READ, "清空未读", "Check_circle")
     )
 
@@ -375,7 +375,7 @@ object AddMainScreenFab : ClickableFeature() {
                                     enabled = !hasForce
                                 )
                                 Text(
-                                    "强制停止",
+                                    "强行停止",
                                     color = if (hasForce) Color.Gray else Color.Unspecified,
                                     modifier = Modifier.clickable(enabled = !hasForce) { newType = FabType.FORCE_STOP })
                             }

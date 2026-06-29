@@ -386,7 +386,7 @@ class MainActivity : ComponentActivity() {
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "一键强制停止并启动微信",
+                                text = "一键强行停止并启动微信",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

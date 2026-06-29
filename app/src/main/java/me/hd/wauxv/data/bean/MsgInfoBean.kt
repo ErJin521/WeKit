@@ -1,13 +1,8 @@
 package me.hd.wauxv.data.bean
 
 import androidx.annotation.Keep
-import dev.ujhhgtg.wekit.features.api.core.WeApi
 import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
 import dev.ujhhgtg.wekit.features.api.core.models.MessageType
-import dev.ujhhgtg.wekit.utils.serialization.DefaultJson
-import dev.ujhhgtg.wekit.utils.serialization.asString
-import dev.ujhhgtg.wekit.utils.serialization.getByPath
-import java.nio.ByteBuffer
 
 @Suppress("unused")
 @Keep
@@ -140,63 +135,15 @@ class MsgInfoBean(
 
     // --- lvBuffer / msg source ---
 
-    fun getMsgSource(): String {
-        val buffer = lvBuffer
-        if (buffer.isEmpty()) return ""
-        if (buffer[0] != '{'.code.toByte() || buffer.last() != '}'.code.toByte()) return ""
+    fun getMsgSource(): String = msg.msgSource
 
-        val bb = ByteBuffer.wrap(buffer)
-        bb.position(1) // skip '{'
+    fun getAtUserList(): List<String> = msg.mentionedUsers
 
-        // skip string field (2-byte length prefix + data)
-        if (bb.remaining() >= 2) {
-            val n1 = bb.short.toInt()
-            if (n1 > 3072) error("Buffer String Length Error")
-            if (n1 != 0 && bb.remaining() >= n1) bb.position(bb.position() + n1)
-        }
+    fun isAtMe(): Boolean = msg.isAtMe
 
-        // skip 4-byte int field
-        if (bb.remaining() >= 4) bb.position(bb.position() + 4)
+    fun isAnnounceAll(): Boolean = msg.isAnnounceAll
 
-        if (bb.remaining() < 2) return ""
-
-        val n2 = bb.short.toInt()
-        if (n2 > 3072) error("Buffer String Length Error")
-        if (n2 == 0 || bb.remaining() < n2) return ""
-
-        val bytes = ByteArray(n2)
-        bb.get(bytes)
-        return String(bytes, Charsets.UTF_8)
-    }
-
-    fun getAtUserList(): List<String> {
-        val msgSource = getMsgSource()
-        if (msgSource.isEmpty()) return emptyList()
-        val json = try {
-            DefaultJson.parseToJsonElement(msgSource)
-        } catch (_: Exception) {
-            return emptyList()
-        }
-        val atUserList = json.getByPath("msgsource.atuserlist")?.asString ?: return emptyList()
-        return atUserList.split(",").filter { it.isNotEmpty() }
-    }
-
-    fun isAtMe(): Boolean {
-        return getAtUserList().contains(WeApi.selfWxId)
-    }
-
-    fun isAnnounceAll(): Boolean {
-        return getAtUserList().contains("announcement@all")
-    }
-
-    fun isNotifyAll(): Boolean {
-        val atList = getAtUserList()
-        if (atList.contains("notify@all") || atList.contains("announcement@all")) {
-            val content = getContent()
-            return content.contains("@所有人") || content.contains("@ all people")
-        }
-        return false
-    }
+    fun isNotifyAll(): Boolean = msg.isNotifyAll
 
     // --- Sub-message helpers ---
 

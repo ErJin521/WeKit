@@ -13,6 +13,7 @@ import dev.ujhhgtg.wekit.utils.serialization.get
 import dev.ujhhgtg.wekit.utils.serialization.getByPath
 import dev.ujhhgtg.wekit.utils.strings.isGroupChatWxId
 import dev.ujhhgtg.wekit.utils.strings.removeWxIdPrefix
+import java.nio.ByteBuffer
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
@@ -42,6 +43,59 @@ class MessageInfo(val instance: Any) {
     val lvBuffer by lazy { getFieldByName<ByteArray>(instance, "field_lvbuffer") }
     val talkerId by lazy { getFieldByName<Int>(instance, "field_talkerId") }
     val seq by lazy { getFieldByName<Long>(instance, "field_msgSeq") }
+
+    val msgSource: String by lazy {
+        val buffer = lvBuffer
+        if (buffer.isEmpty()) return@lazy ""
+        if (buffer[0] != '{'.code.toByte() || buffer.last() != '}'.code.toByte()) return@lazy ""
+
+        val bb = ByteBuffer.wrap(buffer)
+        bb.position(1) // skip '{'
+
+        // skip string field (2-byte length prefix + data)
+        if (bb.remaining() >= 2) {
+            val n1 = bb.short.toInt()
+            if (n1 > 3072) error("Buffer String Length Error")
+            if (n1 != 0 && bb.remaining() >= n1) bb.position(bb.position() + n1)
+        }
+
+        // skip 4-byte int field
+        if (bb.remaining() >= 4) bb.position(bb.position() + 4)
+
+        if (bb.remaining() < 2) return@lazy ""
+
+        val n2 = bb.short.toInt()
+        if (n2 > 3072) error("Buffer String Length Error")
+        if (n2 == 0 || bb.remaining() < n2) return@lazy ""
+
+        val bytes = ByteArray(n2)
+        bb.get(bytes)
+        String(bytes, Charsets.UTF_8)
+    }
+
+    val mentionedUsers: List<String> by lazy {
+        if (msgSource.isEmpty()) return@lazy emptyList()
+        val xml = try {
+            NativeXmlParser.toXmlObject(msgSource)
+        } catch (_: Exception) {
+            return@lazy emptyList()
+        }
+        val atUserListStr = xml.getByPath("msgsource.atuserlist")?.asString ?: return@lazy emptyList()
+        atUserListStr.split(",").filter { it.isNotEmpty() }
+    }
+
+    val isAtMe get() = mentionedUsers.contains(WeApi.selfWxId)
+
+    val isAnnounceAll get() = mentionedUsers.contains("announcement@all")
+
+    val isNotifyAll: Boolean
+        get() {
+            if (mentionedUsers.contains("notify@all") || mentionedUsers.contains("announcement@all")) {
+                val contentText = actualContent
+                return contentText.contains("@所有人") || contentText.contains("@ all people")
+            }
+            return false
+        }
 
     val isInGroupChat = talker.isGroupChatWxId
     val isOfficialAccount = talker.startsWith("gh_")
