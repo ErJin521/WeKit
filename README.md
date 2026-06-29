@@ -16,9 +16,7 @@
 
 ## 联系
 
-[Telegram CI 发布频道](https://t.me/ujhhgtg_wekit_ci)
-
-[Telegram 通知频道](https://t.me/ujhhgtg_wekit_announce)
+[Telegram 超级群组](https://t.me/+4XsfR-SWAtk1NGRl)
 
 ## 致谢
 

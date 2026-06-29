@@ -584,7 +584,7 @@ class MainActivity : ComponentActivity() {
                     icon = TelegramIcon,
                     title = "Telegram",
                     subtitle = "@ujhhgtg_wekit_announce",
-                    onClick = { onUrlClick("https://t.me/ujhhgtg_wekit_announce") }
+                    onClick = { onUrlClick("https://t.me/+4XsfR-SWAtk1NGRl") }
                 )
             }
 
