@@ -41,18 +41,28 @@
 ```none
 /sdcard/Android/data/<宿主包名>/WeKit/
 ├── logs/                     # 运行日志
-├── scripts/                  # JavaScript 脚本 (需手动创建)
+├── assets/                   # 媒体资源 (需手动创建)
+├── scripts_js/               # JavaScript 脚本 (需手动创建)
+├── scripts_java/             # Java 脚本 (需手动创建)
 ├── stickers/                 # 贴纸包 (需手动创建)
 ├── crashes/                  # 崩溃日志 (需启用「调试/崩溃拦截」)
 ├── dex_cache/                # DEX 缓存 (自动生成)
 └── generated_proxy_classes/  # 新版微信设置注入辅助文件 (自动生成)
 ```
 
+#### 媒体资源目录
+
+「自定义消息气泡」所用的气泡文件存放于 `<模块数据>/assets/` 目录下, 命名为 `left_bubble.9.png` `right_bubble.9.png`。
+
 #### 脚本目录
 
-脚本文件存放于 `<模块数据>/scripts/` 目录下, 支持 JavaScript 脚本。
+##### JavaScript
 
-详见 [脚本引擎](features/scripting_js/js-scripting-hook.md)。
+JavaScript 脚本文件存放于 `<模块数据>/scripts_js/` 目录下, 脚本文件直接置入文件夹内。
+
+##### Java
+
+Java 脚本目录存放于 `<模块数据>/scripts_java/` 目录下, 该目录下每个目录放置一个脚本, 每个脚本目录至少包含 `info.prop` `main.java`。
 
 #### 贴纸目录
 

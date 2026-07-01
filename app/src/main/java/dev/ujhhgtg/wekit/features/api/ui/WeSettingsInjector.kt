@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
-import android.text.Editable
-import android.text.TextWatcher
 import com.tencent.mm.plugin.setting.ui.setting.SettingsUI
 import com.tencent.mm.plugin.setting.ui.setting_new.base.BaseSettingPrefUI
 import com.tencent.mm.plugin.setting.ui.setting_new.base.BaseSettingUI
@@ -37,18 +35,13 @@ import dev.ujhhgtg.wekit.utils.reflection.int
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.enums.StringMatchType
 import java.lang.reflect.Modifier
-import java.util.Collections
-import java.util.WeakHashMap
-
 @Feature(name = "设置模块入口", categories = ["API"])
-object WeSettingsInjector : ApiFeature(), IResolveDex {
+object WeSettingsInjector : ApiFeature(), IResolveDex, WeChatInputBarApi.IInputBarListener {
 
     private val methodSetKey by dexMethod()
     private val methodSetTitle by dexMethod()
     private val methodGetKey by dexMethod()
     private val methodAddPref by dexMethod()
-
-    private val hookedFooters = Collections.newSetFromMap(WeakHashMap<ChatFooter, Boolean>())
 
     // method 2
     private val classSettingItemClassesProvider by dexClass(allowFailure = true) {
@@ -236,7 +229,7 @@ object WeSettingsInjector : ApiFeature(), IResolveDex {
     override fun onEnable() {
         hookLauncherUi()
 
-        hookChatInputBar()
+        WeChatInputBarApi.addListener(this)
 
         injectLegacy()
 
@@ -245,42 +238,14 @@ object WeSettingsInjector : ApiFeature(), IResolveDex {
         // injectModernMethod3()
     }
 
-    private fun hookChatInputBar() {
-        // Hook onAttachedToWindow — fires every time a chat is opened.
-        // f207261m (type fl5.i) is the real chat input, assigned in the constructor
-        // via findViewById(R.id.bkk) and is non-null by onAttachedToWindow.
-        //
-        // The previous approach used firstField { type = MMEditText::class } which
-        // found f207201b4 — the voice-to-text popup's EditText. That field is null
-        // until the user taps the mic button, so the hook silently did nothing.
-        //
-        // fl5.i is obfuscated and can't be referenced at compile time, so we locate
-        // the field at runtime: whichever non-null field value exposes addTextChangedListener.
-        ChatFooter::class.java.reflekt()
-            .firstMethod { name = "onAttachedToWindow"; parameterCount = 0 }
-            .hookAfter {
-                val chatFooter = thisObject as ChatFooter
+    override fun onDisable() {
+        WeChatInputBarApi.removeListener(this)
+    }
 
-                if (!hookedFooters.add(chatFooter)) return@hookAfter
-
-                val field = chatFooter.reflekt().firstField {
-                    type { clazz -> clazz.isInterface && clazz.declaredMethods.any { it.name == "addTextChangedListener" } }
-                }.get()!!
-                field.reflekt().firstMethod {
-                    name = "addTextChangedListener"
-                    superclass()
-                }.invoke(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                    override fun afterTextChanged(s: Editable?) {
-                        if (chatFooter.lastText != "#wekit") return
-                        chatFooter.lastText = ""
-                        openSettingsDialog(chatFooter.context)
-                    }
-                })
-
-                WeLogger.d(TAG, "hookChatInputBar: attached text watcher to ${field.javaClass.name}")
-            }
+    override fun onTextChanged(chatFooter: ChatFooter, text: String) {
+        if (text != "#wekit") return
+        chatFooter.lastText = ""
+        openSettingsDialog(chatFooter.context)
     }
 
     private fun injectLegacy() {

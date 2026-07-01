@@ -388,7 +388,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         )
                         ListItem(
                             headlineContent = { Text("显示「发现」标签角标") },
-                            supportingContent = { Text("朋友圈新通知数量") },
+                            supportingContent = { Text("包含朋友圈新通知数量等") },
                             trailingContent = {
                                 Switch(
                                     showFinderBadgeInput,
