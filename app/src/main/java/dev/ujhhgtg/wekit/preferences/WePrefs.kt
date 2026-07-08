@@ -236,7 +236,7 @@ abstract class WePrefs protected constructor() : SharedPreferences, SharedPrefer
             object : ReadWriteProperty<Any?, T> {
                 override fun getValue(thisRef: Any?, property: KProperty<*>): T {
                     @Suppress("UNCHECKED_CAST")
-                    return (default.getObject(key) as? T) ?: defValue
+                    return default.getObject(key) as? T ?: defValue
                 }
 
                 override fun setValue(

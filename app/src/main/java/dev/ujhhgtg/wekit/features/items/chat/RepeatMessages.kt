@@ -36,11 +36,13 @@ object RepeatMessages : SwitchFeature(), WeChatMessageContextMenuApi.IMenuItemsP
         MessageType.TEXT, MessageType.QUOTE, MessageType.APP, MessageType.IMAGE, MessageType.VOICE, MessageType.MICRO_VIDEO, MessageType.STICKER, MessageType.SO_GOU_EMOJI
     )
 
+    fun isSupported(msgInfo: MessageInfo): Boolean = msgInfo.type in SUPPORTED_MSG_TYPES
+
     override fun getMenuItems(): List<WeChatMessageContextMenuApi.MenuItem> {
         return listOf(
             WeChatMessageContextMenuApi.MenuItem(
                 777008, "复读", ExposurePlus1Icon, MaterialSymbols.Outlined.Exposure_plus_1,
-                isSupported = { it.type in SUPPORTED_MSG_TYPES },
+                isSupported = ::isSupported,
                 onClick = { view, _, msgInfo ->
                     val context = view.context
 
@@ -54,7 +56,7 @@ object RepeatMessages : SwitchFeature(), WeChatMessageContextMenuApi.IMenuItemsP
     }
 
     @Suppress("DEPRECATION")
-    private fun repeatMessage(msgInfo: MessageInfo): Boolean {
+    fun repeatMessage(msgInfo: MessageInfo): Boolean {
         return runCatching {
             when (msgInfo.type) {
                 MessageType.TEXT -> WeMessageApi.sendText(msgInfo.talker, msgInfo.actualContent)
