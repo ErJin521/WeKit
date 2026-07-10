@@ -35,6 +35,8 @@ import coil3.request.crossfade
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.wekit.activity.TransparentActivity
 import dev.ujhhgtg.wekit.constants.PackageNames
+import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
 import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
@@ -46,17 +48,31 @@ import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
+import dev.ujhhgtg.wekit.utils.now
 import dev.ujhhgtg.wekit.utils.nul
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 @Feature(
     name = "应用全局背景", categories = ["界面美化"],
     description = "将微信背景全局替换为图片"
 )
-object ApplyGlobalBackground : ClickableFeature() {
+object ApplyGlobalBackground : ClickableFeature(), IResolveDex {
 
     private const val TAG = "ApplyGlobalBackground"
+
+    // g4 = ImageGalleryOPLayer controller in com.tencent.mm.ui.chatting.gallery
+    private val methodShowLayer by dexMethod {
+        matcher {
+            usingEqStrings("showLayer skip: ")
+        }
+    }
+    private val methodHideLayer by dexMethod {
+        matcher {
+            usingEqStrings("hideLayer: ")
+        }
+    }
 
     private var backgroundUri by prefOption("global_bg_uri", nul<String>())
     private var transparentStatusBar by prefOption("global_bg_transparent_status_bar", false)
@@ -66,16 +82,24 @@ object ApplyGlobalBackground : ClickableFeature() {
     private const val APPLIED_URI_TAG_KEY = 0x55020001
     private const val APPLY_STATUS_BAR_DELAY_MS = 80L
 
+    /**
+     * Activities that must never receive the background overlay — full-screen media viewers,
+     * video recorders, scanners, and other UIs where a tinted overlay would be wrong.
+     *
+     * Note: ThumbPlayerViewContainer / ThumbPlayerVideoView are Views (FrameLayout / TextureView),
+     * not Activities, so they were removed from this list — they would never match here.
+     */
     private val blacklistedActivities = setOf(
         "${PackageNames.WECHAT}.plugin.sns.ui.SnsOnlineVideoActivity",
         "${PackageNames.WECHAT}.plugin.recordvideo.activity.MMRecordUI",
-        "${PackageNames.WECHAT}.plugin.thumbplayer.view.ThumbPlayerViewContainer",
-        "${PackageNames.WECHAT}.plugin.thumbplayer.view.ThumbPlayerVideoView",
         "${PackageNames.WECHAT}.plugin.fav.ui.detail.FavoriteImgDetailUI",
         "${PackageNames.WECHAT}.plugin.scanner.ui.BaseScanUI",
         "${PackageNames.WECHAT}.plugin.finder.ui.FinderHomeAffinityUI",
         "${PackageNames.WECHAT}.plugin.lite.ui.WxaLiteAppLiteUI",
         "${PackageNames.WECHAT}.ui.chatting.gallery.ImageGalleryUI",
+        "${PackageNames.WECHAT}.ui.chatting.gallery.ImageGalleryGridUI",
+        "${PackageNames.WECHAT}.ui.chatting.gallery.MediaHistoryGalleryUI",
+        "${PackageNames.WECHAT}.plugin.subapp.ui.gallery.GestureGalleryUI",
         "${PackageNames.WECHAT}.plugin.gallery.picker.view.ImageCropUI",
         "${PackageNames.WECHAT}.plugin.sns.ui.SnsBrowseUI",
         "${PackageNames.WECHAT}.plugin.finder.ui.FinderShareFeedRelUI",
@@ -88,6 +112,9 @@ object ApplyGlobalBackground : ClickableFeature() {
         "${PackageNames.WECHAT}.pluginsdk.ui.ProfileHdHeadImg",
         "${PackageNames.WECHAT}.plugin.brandservice.ui.timeline.preload.ui.TmplWebViewMMUI"
     )
+
+    private var lastShowTime = now()
+    private val DEBOUNCE_DELAY = 500L.milliseconds
 
     override fun onEnable() {
         Activity::class.reflekt().apply {
@@ -124,6 +151,37 @@ object ApplyGlobalBackground : ClickableFeature() {
                 applyTransparentStatusBarIfEnabled(activity)
             }
         }
+
+        methodShowLayer.hookBefore {
+            val ctx = (thisObject.reflekt().firstField { type = View::class }.get()!! as View).context
+
+            if (now() - lastShowTime < DEBOUNCE_DELAY) {
+                WeLogger.d(TAG, "ignoring hide overlay request")
+                return@hookBefore
+            }
+
+            overlayFromContext(ctx)?.visibility = View.INVISIBLE
+            WeLogger.d(TAG, "hiding overlay")
+        }
+
+        methodHideLayer.hookBefore {
+            val ctx = (thisObject.reflekt().firstField { type = View::class }.get()!! as View).context
+
+            lastShowTime = now()
+
+            overlayFromContext(ctx)?.visibility = View.VISIBLE
+            WeLogger.d(TAG, "showing overlay")
+        }
+    }
+
+    /** Walk the Context chain to find the hosting Activity's background overlay. */
+    private fun overlayFromContext(ctx: Context): ImageView? {
+        var c = ctx
+        while (c is android.content.ContextWrapper) {
+            if (c is Activity) return findOverlay(c.window?.decorView as? ViewGroup ?: return null)
+            c = c.baseContext
+        }
+        return null
     }
 
     private const val MIN = 0.01f
@@ -280,6 +338,7 @@ object ApplyGlobalBackground : ClickableFeature() {
         val decor = activity.window?.decorView as? ViewGroup ?: return
         val overlay = findOverlay(decor) ?: createOverlay(activity, decor)
 
+        overlay.visibility = View.VISIBLE
         overlay.alpha = opacity
         overlay.bringToFront()
 
