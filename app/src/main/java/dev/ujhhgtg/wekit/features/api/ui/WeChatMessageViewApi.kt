@@ -1,19 +1,27 @@
 package dev.ujhhgtg.wekit.features.api.ui
 
 import android.view.View
+import android.widget.TextView
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
 import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
 import dev.ujhhgtg.wekit.features.core.ApiFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.utils.HookParam
 import dev.ujhhgtg.wekit.utils.WeLogger
+import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
-@Feature(name = "消息 View 创建监听服务", categories = ["API"], description = "提供消息 View 创建监听能力")
 object WeChatMessageViewApi : ApiFeature(), IResolveDex {
+
+    override val technicalId = "消息 View 创建监听服务"
+    override val nameRes = R.string.feature_we_chat_message_view_api_name
+    override val categoryIds = listOf(FeatureCategoryIds.API)
+    override val descriptionRes = R.string.feature_we_chat_message_view_api_description
 
     fun interface ICreateViewListener {
         fun onCreateView(
@@ -21,7 +29,18 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
         )
     }
 
+    interface IMessageViewLifecycleListener {
+        fun onMessageViewAttached(view: View, message: MessageInfo) {}
+        fun onMessageViewDetached(view: View, message: MessageInfo) {}
+        fun onMessageViewRecycled(view: View, message: MessageInfo) {}
+    }
+
     private val listeners = CopyOnWriteArrayList<ICreateViewListener>()
+    private val lifecycleListeners = CopyOnWriteArrayList<IMessageViewLifecycleListener>()
+    private val currentBindings =
+        Collections.synchronizedMap(WeakHashMap<View, MessageInfo>())
+    private val attachStateListeners =
+        Collections.synchronizedMap(WeakHashMap<View, View.OnAttachStateChangeListener>())
 
     fun addListener(listener: ICreateViewListener) {
         if (!listeners.contains(listener)) {
@@ -37,6 +56,20 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
         )
     }
 
+    fun addLifecycleListener(listener: IMessageViewLifecycleListener) {
+        if (!lifecycleListeners.contains(listener)) {
+            lifecycleListeners.add(listener)
+        }
+    }
+
+    fun removeLifecycleListener(listener: IMessageViewLifecycleListener) {
+        val removed = lifecycleListeners.remove(listener)
+        WeLogger.i(
+            TAG,
+            "lifecycle listener remove ${if (removed) "succeeded" else "failed"}, current listener count: ${lifecycleListeners.size}"
+        )
+    }
+
     private const val TAG = "WeChatMessageViewApi"
 
     private val methodChatItemOnBindView by dexMethod {
@@ -48,7 +81,32 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
         }
     }
 
+    private val methodChatItemOnViewRecycled by dexMethod {
+        matcher {
+            usingStrings("rvnotify-test-onViewRecycled viewType=")
+        }
+    }
+
+    private val methodChatItemSetNickname by dexMethod {
+        matcher {
+            declaredClass {
+                usingStrings("MicroMsg.ChattingItem")
+            }
+            paramTypes(null, CharSequence::class.java)
+            returnType(Void.TYPE)
+        }
+    }
+
     override fun onEnable() {
+        methodChatItemSetNickname.hookAfter {
+            if (args[1] != null) return@hookAfter
+            val holder = args[0] ?: return@hookAfter
+            val userTv = holder.reflekt()
+                .firstFieldOrNull { name = "userTV"; superclass() }
+                ?.get() as? TextView ?: return@hookAfter
+            userTv.text = null
+        }
+
         methodChatItemOnBindView.hookAfter {
             val holder = args[0]!!
             val view = holder.reflekt()
@@ -57,6 +115,20 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
                     superclass()
                 }
                 .get()!! as View
+            val message = getMsgInfoFromParam(this)
+            ensureAttachStateListener(view)
+
+            val previous = synchronized(currentBindings) { currentBindings[view] }
+            val bindingChanged = previous?.instance !== message.instance
+            if (view.isAttachedToWindow && bindingChanged && previous != null) {
+                dispatchLifecycle { it.onMessageViewDetached(view, previous) }
+            }
+            synchronized(currentBindings) {
+                currentBindings[view] = message
+            }
+            if (view.isAttachedToWindow && bindingChanged) {
+                dispatchLifecycle { it.onMessageViewAttached(view, message) }
+            }
 
             for (listener in listeners) {
                 try {
@@ -64,6 +136,50 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
                 } catch (ex: Exception) {
                     WeLogger.e(TAG, "listener ${listener.javaClass.name} threw", ex)
                 }
+            }
+        }
+
+        methodChatItemOnViewRecycled.hookBefore {
+            val holder = args[0]!!
+            val view = holder.reflekt()
+                .firstField {
+                    type = View::class
+                    superclass()
+                }
+                .get()!! as View
+            val message = synchronized(currentBindings) { currentBindings[view] } ?: return@hookBefore
+            dispatchLifecycle { it.onMessageViewRecycled(view, message) }
+            synchronized(currentBindings) {
+                currentBindings.remove(view)
+            }
+        }
+    }
+
+    private fun ensureAttachStateListener(view: View) {
+        synchronized(attachStateListeners) {
+            if (attachStateListeners.containsKey(view)) return
+            val listener = object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(view: View) {
+                    val message = synchronized(currentBindings) { currentBindings[view] } ?: return
+                    dispatchLifecycle { it.onMessageViewAttached(view, message) }
+                }
+
+                override fun onViewDetachedFromWindow(view: View) {
+                    val message = synchronized(currentBindings) { currentBindings[view] } ?: return
+                    dispatchLifecycle { it.onMessageViewDetached(view, message) }
+                }
+            }
+            attachStateListeners[view] = listener
+            view.addOnAttachStateChangeListener(listener)
+        }
+    }
+
+    private fun dispatchLifecycle(callback: (IMessageViewLifecycleListener) -> Unit) {
+        for (listener in lifecycleListeners) {
+            try {
+                callback(listener)
+            } catch (ex: Exception) {
+                WeLogger.e(TAG, "listener ${listener.javaClass.name} threw", ex)
             }
         }
     }
@@ -74,7 +190,23 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
             .get()!!
     }
 
+    /** Returns every (view, message) pair currently bound whose message satisfies [matcher]. */
+    fun findBoundViews(matcher: (MessageInfo) -> Boolean): List<Pair<View, MessageInfo>> {
+        synchronized(currentBindings) {
+            return currentBindings.entries
+                .filter { matcher(it.value) }
+                .map { it.key to it.value }
+        }
+    }
+
+    fun getBoundMessage(view: View): MessageInfo? =
+        synchronized(currentBindings) { currentBindings[view] }
+
     fun getMsgInfoFromParam(param: HookParam): MessageInfo {
+        val item = param.args[1]
+        val current = item?.let { findMessageInfo(it) }
+        if (current != null) return current
+
         val chattingDataAdapter = param.thisObject!!.reflekt()
             .firstField { type = WeMessageApi.classChattingDataAdapter.clazz }
             .get()!!
@@ -83,5 +215,19 @@ object WeChatMessageViewApi : ApiFeature(), IResolveDex {
             .firstMethod { name = "getItem" }
             .invoke(msgId)!!
         return MessageInfo(msgInfo)
+    }
+
+    private fun findMessageInfo(value: Any, depth: Int = 2): MessageInfo? {
+        if (value.javaClass == WeMessageApi.classMsgInfo.clazz) {
+            return MessageInfo(value)
+        }
+        if (depth == 0) return null
+
+        value.reflekt().fields { superclass() }.forEach { field ->
+            val nested = runCatching { field.get() }.getOrNull() ?: return@forEach
+            val result = findMessageInfo(nested, depth - 1)
+            if (result != null) return result
+        }
+        return null
     }
 }

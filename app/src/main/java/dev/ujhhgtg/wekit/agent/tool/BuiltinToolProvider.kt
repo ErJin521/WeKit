@@ -1,24 +1,20 @@
 package dev.ujhhgtg.wekit.agent.tool
 
 import dev.ujhhgtg.wekit.agent.tool.BuiltinToolProvider.Companion.AVAILABILITY_CHECKS
-import dev.ujhhgtg.wekit.agent.tool.BuiltinToolProvider.Companion.FS_TOOL_NAMES
 import dev.ujhhgtg.wekit.agent.tool.BuiltinToolProvider.Companion.exaKeyPresent
 import dev.ujhhgtg.wekit.features.core.AgentTool
 import kotlinx.serialization.json.JsonObject
 
 /**
- * The built-in tool providers (§3.4), split by the `@AgentTool(group=…)` tag into three fixed
- * providers so the settings UI can present them separately and permissions are stored per provider:
+ * The built-in tool providers (§3.4), split by the `@AgentTool(group=…)` tag into fixed providers
+ * so the settings UI can present them separately:
  *
  *  - `builtin-wechat`      — WeChat operations (send/read/group/moments/…)
  *  - `builtin-wechat-sql`  — raw database SQL (query / execute)
- *  - `builtin-fs`          — workspace/memory file tools + `load_skill`
+ *  - `builtin-fs`          — Linux environment tools + `load_skill`
  *
- * All are always available and pinned/undeletable in settings. Within `builtin-fs`, the file tools
- * ([FS_TOOL_NAMES]) are hidden from the model unless a workspace or memory is enabled;
- * `load_skill` stays visible regardless (skills are their own dynamic-discovery mechanism). That
- * gating — and the vision gating of [VISION_TOOL_NAMES] — is applied per turn by [ToolRegistry] from
- * the turn's [ToolVisibility], not here, so concurrent sessions can't clobber each other.
+ * All are always available and pinned/undeletable in settings. Vision gating is applied per turn by
+ * [ToolRegistry] from the turn's [ToolVisibility], so concurrent sessions cannot clobber each other.
  */
 class BuiltinToolProvider(
     override val id: String,
@@ -31,12 +27,8 @@ class BuiltinToolProvider(
 
     private val byName: Map<String, AgentToolDescriptor> = descriptors.associateBy { it.name }
 
-    /** Tool name + factory-default mode, for permission seeding (includes hidden fs tools). */
-    fun seedInfos(): List<BuiltinToolInfo> =
-        descriptors.map { BuiltinToolInfo(it.name, ToolMode.defaultFor(it.sideEffect)) }
-
     /**
-     * Every tool this provider owns. Conditional gating ([FS_TOOL_NAMES] / [VISION_TOOL_NAMES]) is
+     * Every tool this provider owns. Conditional vision gating is
      * NOT applied here — it is per-turn state and is applied by
      * [dev.ujhhgtg.wekit.agent.tool.ToolRegistry.resolveVisibleTools] from the turn's
      * [ToolVisibility]. Doing it here would mean reading process-global flags that concurrent
@@ -52,7 +44,7 @@ class BuiltinToolProvider(
                     name = d.name,
                     description = if (notice != null) "${d.description}\n\n⚠ $notice" else d.description,
                     jsonSchema = d.buildJsonSchema(),
-                    factoryDefaultMode = ToolMode.defaultFor(d.sideEffect),
+                    sideEffect = d.sideEffect,
                 )
             }
 
@@ -70,8 +62,6 @@ class BuiltinToolProvider(
         }
     }
 
-    data class BuiltinToolInfo(val name: String, val defaultMode: ToolMode)
-
     companion object {
         const val WECHAT_ID = AgentTool.BUILTIN_WECHAT
         const val WECHAT_SQL_ID = AgentTool.BUILTIN_WECHAT_SQL
@@ -82,6 +72,8 @@ class BuiltinToolProvider(
         const val TRIGGER_ID = AgentTool.BUILTIN_TRIGGER
         const val INFO_ID = AgentTool.BUILTIN_INFO
         const val NET_ID = AgentTool.BUILTIN_NET
+        const val TERMINAL_ID = AgentTool.BUILTIN_TERMINAL
+        val TERMINAL_TOOL_NAMES = setOf("terminal_list", "terminal_start", "terminal_write", "terminal_control", "terminal_read", "terminal_resize", "terminal_kill")
 
         private val DISPLAY_NAMES = mapOf(
             WECHAT_ID to "微信操作",
@@ -94,26 +86,6 @@ class BuiltinToolProvider(
             INFO_ID to "环境信息",
             NET_ID to "网络",
         )
-
-        /**
-         * File-tool names within `builtin-fs`, hidden from the model unless a workspace or memory is
-         * enabled. Kept as a name set so gating never touches permission seeding (rows are still
-         * seeded; the tools are simply not advertised while disabled). `load_skill` is NOT here — it
-         * is always visible.
-         */
-        val FS_TOOL_NAMES = setOf(
-            "read_file", "list_dir", "search_files",
-            "write_file", "append_file", "delete_file", "move_file",
-        )
-
-        /**
-         * Set by WeAgentService (and the memory settings screen) from settings: true when workspace
-         * OR memory is enabled. Genuinely global — every writer derives the same value from the same
-         * setting — so it only supplies the default in [ToolVisibility.fromGlobals]; a running turn
-         * uses the value snapshotted into its own [ToolVisibility].
-         */
-        @Volatile
-        var fsToolsVisible: Boolean = false
 
         /**
          * Screenshot tool name — advertised only when the turn's model supports vision. Gated

@@ -9,7 +9,7 @@ import java.io.File
  *
  * Layout — every skill is a directory holding a `SKILL.md`, plus any bundled resource files:
  * ```
- * KnownPaths.moduleData/agent/skills/<skill_name>/SKILL.md
+ * KnownPaths.moduleRoot/agent/skills/<skill_name>/SKILL.md
  *                                    <skill_name>/<any bundled files…>
  * ```
  *
@@ -38,11 +38,11 @@ object SkillStore {
     const val SKILL_FILE = "SKILL.md"
     private const val DISABLED_MARKER = ".disabled"
 
-    /** Same name rules as workspaces: usable as a directory name. */
+    /** Name rules suitable for use as a directory name. */
     private val ILLEGAL_CHARS = Regex("""[/\\:*?"<>|]""")
 
     private val skillsRoot: File by lazy {
-        File(File(KnownPaths.moduleData.toFile(), "agent"), "skills").apply { mkdirs() }
+        File(File(KnownPaths.moduleRoot.toFile(), "agent"), "skills").apply { mkdirs() }
     }
 
     /** A parsed skill: identity from frontmatter, [body] is the Markdown after the frontmatter. */

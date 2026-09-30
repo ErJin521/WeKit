@@ -4,31 +4,47 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.Parcelable
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.clickable
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.Text
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.core.view.children
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.toClass
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
+import dev.ujhhgtg.wekit.features.api.ui.WeChatInputBarMenuApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
+import dev.ujhhgtg.wekit.i18n.WeKitLocaleController
+import dev.ujhhgtg.wekit.data.KvStore.prefOption
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
-import dev.ujhhgtg.wekit.ui.content.DefaultColumn
 import dev.ujhhgtg.wekit.ui.content.OsmLocationPicker
 import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.BaseWidget
+import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
+import dev.ujhhgtg.wekit.utils.TargetProcess
+import dev.ujhhgtg.wekit.utils.TargetProcesses
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.getTopMostActivity
 import dev.ujhhgtg.wekit.utils.android.showToast
 import org.osmdroid.util.GeoPoint
+import java.util.Collections
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.WeakHashMap
 
-@Feature(name = "虚拟定位", categories = ["系统与隐私"], description = "预设定微信获取到的经纬度")
 object FakeLocation : ClickableFeature(), IResolveDex {
+
+    override val technicalId = "虚拟定位"
+    override val nameRes = R.string.feature_fake_location_name
+    override val categoryIds = listOf(FeatureCategoryIds.SYSTEM_PRIVACY)
+    override val descriptionRes = R.string.feature_fake_location_description
+    override val targetProcesses = setOf(TargetProcess.MAIN, TargetProcess.APPBRAND)
 
     private val methodListener by dexMethod {
         matcher {
@@ -61,6 +77,8 @@ object FakeLocation : ClickableFeature(), IResolveDex {
     private var longitude by prefOption(KEY_LNG, DEFAULT_LNG)
 
     private val hookedLocationClasses = ConcurrentHashMap.newKeySet<Class<*>>()
+    private val hookedAppGridLongClickClasses = ConcurrentHashMap.newKeySet<Class<*>>()
+    private val locationItemViews = Collections.newSetFromMap(WeakHashMap<View, Boolean>())
     private val locationIntentRegex = Regex("""lat ([-+]?[0-9]*\.?[0-9]+);lng ([-+]?[0-9]*\.?[0-9]+);""")
 
     @Volatile
@@ -76,48 +94,106 @@ object FakeLocation : ClickableFeature(), IResolveDex {
                 hookTencentLocation(tencentLocation)
             }
         }
+
+        // Mini Apps use the same Tencent location callbacks in their own process. The
+        // chat attachment panel, however, belongs exclusively to the main process.
+        if (!TargetProcesses.isInMain) return
+
+        WeChatInputBarMenuApi.methodAppGridGetView.hookAfter {
+            val itemView = result as View
+            val isLocationItem = isLocationItem(itemView)
+            synchronized(locationItemViews) {
+                if (isLocationItem) locationItemViews.add(itemView)
+                else locationItemViews.remove(itemView)
+            }
+            if (isLocationItem) {
+                val appGrid = args[2] as AdapterView<*>
+                hookAppGridLongClick(appGrid.onItemLongClickListener!!)
+            }
+        }
     }
 
     override fun onDisable() {
         hookedLocationClasses.clear()
+        hookedAppGridLongClickClasses.clear()
+        synchronized(locationItemViews) { locationItemViews.clear() }
         pendingWeChatPicker = false
         wechatPickerHooked = false
     }
 
     override fun onClick(context: ComponentActivity) {
-        showLocationPickerChooser(context)
+        showLocationPicker(context)
     }
 
-    private fun showLocationPickerChooser(context: Context) {
+    private fun showLocationPicker(context: Context) {
         showComposeDialog(context) {
             AlertDialogContent(
-                title = { Text("选择虚拟定位") },
+                title = { Text(stringResource(R.string.system_fake_location_select)) },
                 text = {
-                    DefaultColumn {
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                onDismiss()
-                                launchWechatLocationPicker()
-                            },
-                            supportingContent = { Text("调用微信内置地图选择位置") },
-                            headlineContent = { Text("微信原生地图选点") },
-                        )
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                onDismiss()
-                                showOsmLocationPicker(context)
-                            },
-                            supportingContent = { Text("使用 OpenStreetMap 选择位置") },
-                            headlineContent = { Text("OSM 地图选点") },
-                        )
+                    SegmentedColumn {
+                        item {
+                            BaseWidget(
+                                title = stringResource(R.string.system_fake_location_wechat),
+                                description = stringResource(R.string.system_fake_location_wechat_summary),
+                                onClick = {
+                                    onDismiss()
+                                    launchWechatLocationPicker()
+                                },
+                            )
+                        }
+                        item {
+                            BaseWidget(
+                                title = stringResource(R.string.system_fake_location_osm),
+                                description = stringResource(R.string.system_fake_location_osm_summary),
+                                onClick = {
+                                    onDismiss()
+                                    showOsmLocationPicker(context)
+                                },
+                            )
+                        }
                     }
                 },
                 dismissButton = {
                     TextButton(onDismiss) {
-                        Text("取消")
+                        Text(stringResource(R.string.dialog_cancel))
                     }
                 }
             )
+        }
+    }
+
+    private fun isLocationItem(itemView: View): Boolean {
+        return buildList {
+            fun collectVisibleIcons(view: View) {
+                if (view.visibility != View.VISIBLE) return
+                if (view is ImageView && view.drawable != null) add(view.drawable)
+                if (view is android.view.ViewGroup) view.children.forEach(::collectVisibleIcons)
+            }
+            collectVisibleIcons(itemView)
+        }.any { drawable ->
+            runCatching {
+                val resourceId = drawable.reflekt()
+                    .firstField { type = Int::class; superclass() }
+                    .get() as Int
+                itemView.resources.getResourceEntryName(resourceId) == "panel_icon_location"
+            }.getOrDefault(false)
+        }
+    }
+
+    private fun hookAppGridLongClick(listener: AdapterView.OnItemLongClickListener) {
+        val listenerClass = listener.javaClass
+        if (!hookedAppGridLongClickClasses.add(listenerClass)) return
+
+        listenerClass.reflekt().firstMethod {
+            name = "onItemLongClick"
+            parameters(AdapterView::class, View::class, Int::class, Long::class)
+        }.hookBefore {
+            val itemView = args[1] as View
+            val isLocationItem = synchronized(locationItemViews) { itemView in locationItemViews }
+            if (!isLocationItem) return@hookBefore
+
+            showLocationPicker((args[0] as AdapterView<*>).context)
+            result = true
         }
     }
 
@@ -141,14 +217,14 @@ object FakeLocation : ClickableFeature(), IResolveDex {
     private fun launchWechatLocationPicker() {
         val activity = getTopMostActivity()
         if (activity == null) {
-            showToast("获取当前 Activity 失败!")
+            showToast(localizedSystemString(R.string.system_fake_location_no_activity))
             return
         }
 
         val redirectUiClass = "${activity.packageName}.plugin.location.ui.RedirectUI".toClass()
 
         if (!ensureWeChatPickerHooked(redirectUiClass)) {
-            showToast("微信地图选点结果监听失败!")
+            showToast(localizedSystemString(R.string.system_fake_location_listener_failed))
             return
         }
 
@@ -163,7 +239,7 @@ object FakeLocation : ClickableFeature(), IResolveDex {
         }.onFailure {
             pendingWeChatPicker = false
             WeLogger.e(TAG, "failed to launch native location picker", it)
-            showToast("启动微信地图失败! 错因: ${it.message}")
+            showToast(localizedSystemString(R.string.system_fake_location_launch_failed, it.message.orEmpty()))
         }
     }
 
@@ -228,7 +304,7 @@ object FakeLocation : ClickableFeature(), IResolveDex {
         val longitude = match?.groupValues?.getOrNull(2)?.toFloatOrNull()
         if (latitude == null || longitude == null) {
             WeLogger.w(TAG, "failed to parse native location result: $locationData")
-            showToast("解析微信地图选点失败")
+            showToast(localizedSystemString(R.string.system_fake_location_parse_failed))
             return
         }
 
@@ -238,6 +314,13 @@ object FakeLocation : ClickableFeature(), IResolveDex {
     private fun saveLocation(latitude: Float, longitude: Float) {
         this.latitude = latitude
         this.longitude = longitude
-        showToast("已选择 ${"%.4f".format(latitude)}, ${"%.4f".format(longitude)}")
+        val locale = Locale.forLanguageTag(WeKitLocaleController.resolvedLocale.androidTag)
+        showToast(
+            localizedSystemString(
+                R.string.system_fake_location_selected,
+                String.format(locale, "%.4f", latitude),
+                String.format(locale, "%.4f", longitude),
+            )
+        )
     }
 }

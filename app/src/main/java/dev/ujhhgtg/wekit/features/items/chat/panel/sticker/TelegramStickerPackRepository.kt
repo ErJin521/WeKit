@@ -1,5 +1,10 @@
 package dev.ujhhgtg.wekit.features.items.chat.panel.sticker
 
+import dev.ujhhgtg.wekit.utils.fs.moveReplacing
+import kotlin.io.path.inputStream
+import kotlin.io.path.moveTo
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.features.items.chat.localizedChatString
 import dev.ujhhgtg.wekit.features.items.chat.panel.PanelPaths
 import dev.ujhhgtg.wekit.features.items.chat.panel.PanelSettings
 import dev.ujhhgtg.wekit.features.items.chat.panel.parallelForEachWithProgress
@@ -12,7 +17,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
@@ -84,7 +88,7 @@ object TelegramStickerPackRepository {
     ): Result<TelegramStickerImportResult> = withContext(Dispatchers.IO) {
         try {
             val token = PanelSettings.telegramBotToken.trim()
-            require(PanelSettings.isValidTelegramBotToken(token)) { "请先在设置中填写有效的 Telegram Bot Token" }
+            require(PanelSettings.isValidTelegramBotToken(token)) { localizedChatString(R.string.chat_telegram_token_invalid) }
             val removeRoundedVideoMask = PanelSettings.stickerRemoveRoundedVideoMask
             val tgsGifFrameRate = PanelSettings.stickerTgsGifFrameRate.coerceIn(
                 PanelSettings.MIN_TGS_GIF_FRAME_RATE,
@@ -93,10 +97,10 @@ object TelegramStickerPackRepository {
             val downloadConcurrency = PanelSettings.effectivePanelDownloadConcurrency
             val conversionConcurrency = PanelSettings.effectivePanelConversionConcurrency
             val requestedName = extractStickerSetName(value)
-                ?: throw IllegalArgumentException("请输入有效的 Telegram 表情包名称或链接")
+                ?: throw IllegalArgumentException(localizedChatString(R.string.chat_telegram_pack_name_invalid))
             val stickerSet = TelegramStickerApiClient.getStickerSet(token, requestedName)
             val stickers = stickerSet.stickers.distinctBy(TelegramSticker::fileUniqueId)
-            require(stickers.isNotEmpty()) { "Telegram 表情包为空" }
+            require(stickers.isNotEmpty()) { localizedChatString(R.string.chat_telegram_pack_empty) }
 
             val stagingDir = PanelPaths.telegramStickerImportDir / safePathSegment(stickerSet.name)
             val rawDir = (stagingDir / "raw").also { it.createDirectories() }
@@ -163,11 +167,11 @@ object TelegramStickerPackRepository {
                             sourceFormat = sourceFormat.name,
                             imported = true,
                         )
-                    } else if (!rawPath.isRegularFile() || Files.size(rawPath) == 0L) {
+                    } else if (!rawPath.isRegularFile() || rawPath.fileSize() == 0L) {
                         try {
                             val remoteFile = TelegramStickerApiClient.getFile(token, sticker.fileId)
                             require(remoteFile.fileUniqueId == sticker.fileUniqueId) {
-                                "Telegram 文件标识不一致"
+                                localizedChatString(R.string.chat_telegram_file_identity_mismatch)
                             }
                             TelegramStickerApiClient.downloadFile(
                                 token,
@@ -216,8 +220,8 @@ object TelegramStickerPackRepository {
                         val rawPath = rawDir / "$identity.${sourceFormat.extension}"
                         if (!failures.containsKey(sticker.fileUniqueId)) {
                             try {
-                                require(rawPath.isRegularFile() && Files.size(rawPath) > 0L) {
-                                    "Telegram 表情文件不可读"
+                                require(rawPath.isRegularFile() && rawPath.fileSize() > 0L) {
+                                    localizedChatString(R.string.chat_telegram_sticker_unreadable)
                                 }
                                 val importPath = when (sourceFormat) {
                                     TelegramStickerSourceFormat.WEBP -> rawPath
@@ -237,7 +241,7 @@ object TelegramStickerPackRepository {
                                             tgsGifFrameRate,
                                         )
                                 }
-                                Files.newInputStream(importPath).use { input ->
+                                importPath.inputStream().use { input ->
                                     StickerPanelRepository.importTelegramSticker(
                                         packName,
                                         sticker.fileUniqueId,
@@ -308,8 +312,8 @@ object TelegramStickerPackRepository {
                         "imported=$importedCount unchanged=$unchangedCount failed=${failures.size}",
             )
             if (importedCount + unchangedCount == 0) {
-                val first = failures.values.firstOrNull() ?: "没有可导入的 Telegram 表情"
-                throw IllegalStateException("Telegram 表情包导入失败：$first")
+                val first = failures.values.firstOrNull() ?: localizedChatString(R.string.chat_telegram_no_importable_stickers)
+                throw IllegalStateException(localizedChatString(R.string.chat_telegram_pack_import_failed, first))
             }
             Result.success(
                 TelegramStickerImportResult(
@@ -355,14 +359,7 @@ object TelegramStickerPackRepository {
         }
         result.getOrThrow()
         currentCoroutineContext().ensureActive()
-        runCatching {
-            Files.move(
-                partial,
-                destination,
-                StandardCopyOption.REPLACE_EXISTING,
-                StandardCopyOption.ATOMIC_MOVE,
-            )
-        }.getOrElse { Files.move(partial, destination, StandardCopyOption.REPLACE_EXISTING) }
+        partial.moveReplacing(destination)
         return destination
     }
 
@@ -398,7 +395,7 @@ object TelegramStickerPackRepository {
         candidates.take(100).forEach { candidate ->
             StickerPanelRepository.createPack(candidate).getOrNull()?.let { return it }
         }
-        error("无法为 Telegram 表情包创建本地包")
+        error(localizedChatString(R.string.chat_telegram_local_pack_create_failed))
     }
 
     @Synchronized
@@ -407,14 +404,7 @@ object TelegramStickerPackRepository {
         val temporary = path.resolveSibling("${path.fileName}.tmp")
         try {
             temporary.writeText(DefaultJson.encodeToString(manifest))
-            runCatching {
-                Files.move(
-                    temporary,
-                    path,
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE,
-                )
-            }.getOrElse { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING) }
+            temporary.moveReplacing(path)
         } finally {
             temporary.deleteIfExists()
         }

@@ -1,12 +1,17 @@
 package dev.ujhhgtg.wekit.features.api.ui
 
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.core.ApiFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 
-@Feature(name = "微信主屏幕美化服务", categories = ["API"], description = "提供美化微信主屏幕的能力")
 object WeMainActivityBeautifyApi : ApiFeature(), IResolveDex {
+
+    override val technicalId = "微信主屏幕美化服务"
+    override val nameRes = R.string.feature_we_main_activity_beautify_api_name
+    override val categoryIds = listOf(FeatureCategoryIds.API)
+    override val descriptionRes = R.string.feature_we_main_activity_beautify_api_description
 
     val methodDoOnCreate by dexMethod {
         matcher {

@@ -191,6 +191,46 @@ pub fn any_to_silk(mp3_path: &str, silk_path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn pcm_file_to_silk(
+    pcm_path: &str,
+    silk_path: &str,
+    sample_rate: u32,
+    channel_count: usize,
+) -> Result<()> {
+    if sample_rate == 0 {
+        bail!("Invalid PCM sample rate: 0");
+    }
+    if channel_count == 0 {
+        bail!("Invalid PCM channel count: 0");
+    }
+
+    let pcm_file = File::open(pcm_path)?;
+    let frame_bytes = channel_count
+        .checked_mul(std::mem::size_of::<i16>())
+        .ok_or_else(|| anyhow!("PCM channel count is too large"))?;
+    let pcm_len = pcm_file.metadata()?.len();
+    if pcm_len % frame_bytes as u64 != 0 {
+        bail!("PCM byte length is not aligned to channel frames");
+    }
+
+    let frame_count = usize::try_from(pcm_len / frame_bytes as u64)
+        .map_err(|_| anyhow!("PCM file is too large"))?;
+    let mut reader = BufReader::new(pcm_file);
+    let mut frame = vec![0u8; frame_bytes];
+    let mut mono = Vec::with_capacity(frame_count);
+    for _ in 0..frame_count {
+        reader.read_exact(&mut frame)?;
+        let sum = frame
+            .chunks_exact(2)
+            // Android's supported arm64 ABI is little-endian, matching its native PCM byte order.
+            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as i64)
+            .sum::<i64>();
+        mono.push((sum / channel_count as i64).clamp(i16::MIN as i64, i16::MAX as i64) as i16);
+    }
+    let pcm = resample_to(&mono, sample_rate, 24000);
+    pcm_bytes_to_silk(&pcm, File::create(silk_path)?)
+}
+
 const SILK_MAGIC: &[u8] = b"#!SILK_V3";
 const SILK_FRAME_MS: i32 = 20;
 
@@ -534,8 +574,10 @@ fn get_silk_duration_ms(path: &str) -> Result<i64> {
         }
 
         if toc.corrupt != 0 {
-            // Skip corrupt packets rather than hard-erroring; a single bad
-            // packet shouldn't invalidate the entire duration estimate.
+            // Some playable WeChat SILK packets are rejected by this SDK's TOC
+            // parser. WeChat's length-prefixed container stores one 20 ms frame
+            // per such packet, so it must still contribute to the duration.
+            total_ms += SILK_FRAME_MS as i64;
             continue;
         }
 
@@ -544,4 +586,35 @@ fn get_silk_duration_ms(path: &str) -> Result<i64> {
     }
 
     Ok(total_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn silk_duration_counts_wechat_packets_rejected_by_sdk_toc() {
+        let mut silk = Vec::from([0x02]);
+        silk.extend_from_slice(SILK_MAGIC);
+        for _ in 0..2 {
+            silk.extend_from_slice(&11_i16.to_le_bytes());
+            silk.extend_from_slice(&[0; 11]);
+        }
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "wekit-silk-duration-{}-{unique}.amr",
+            std::process::id(),
+        ));
+        std::fs::write(&path, silk).unwrap();
+
+        let duration_ms = get_audio_duration_ms(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(duration_ms, 40);
+    }
 }

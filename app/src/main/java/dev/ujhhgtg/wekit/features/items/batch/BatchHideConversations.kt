@@ -3,10 +3,13 @@ package dev.ujhhgtg.wekit.features.items.batch
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeConversationApi
 import dev.ujhhgtg.wekit.features.api.core.WeDatabaseApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
 import dev.ujhhgtg.wekit.ui.content.ContactsSelector
@@ -19,12 +22,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@Feature(
-    name = "批量隐藏对话",
-    categories = ["批量操作"],
-    description = "从对话列表移除选中的对话 (仅删除 rconversation 记录, 保留聊天记录), 重新收到消息时对话会再次出现"
-)
 object BatchHideConversations : ClickableFeature() {
+
+    override val technicalId = "批量隐藏对话"
+    override val nameRes = R.string.feature_batch_hide_conversations_name
+    override val categoryIds = listOf(FeatureCategoryIds.BATCH)
+    override val descriptionRes = R.string.feature_batch_hide_conversations_description
 
     override val noSwitchWidget = true
 
@@ -33,13 +36,13 @@ object BatchHideConversations : ClickableFeature() {
 
         showComposeDialog(context) {
             ContactsSelector(
-                title = "选择要隐藏的对话",
+                title = context.localizedBatchString(R.string.batch_hide_conversations_select),
                 contacts = contacts,
                 initialSelectedWxIds = emptySet(),
                 onDismiss = onDismiss,
                 onConfirm = { selectedWxIds ->
                     if (selectedWxIds.isEmpty()) {
-                        showToast("请选择至少一个对话")
+                        showToast(context.localizedBatchString(R.string.batch_select_at_least_one_conversation))
                         return@ContactsSelector
                     }
 
@@ -53,14 +56,22 @@ object BatchHideConversations : ClickableFeature() {
     private fun confirmAndHide(context: Context, wxIds: Set<String>) {
         showComposeDialog(context) {
             AlertDialogContent(
-                title = { Text("隐藏对话") },
-                text = { Text("确定要从对话列表移除选中的 ${wxIds.size} 个对话吗? 聊天记录将保留, 重新收到消息时对话会再次出现.") },
-                dismissButton = { TextButton(onDismiss) { Text("取消") } },
+                title = { Text(stringResource(R.string.batch_hide_conversations_title)) },
+                text = {
+                    Text(
+                        pluralStringResource(
+                            R.plurals.batch_hide_conversations_confirm,
+                            wxIds.size,
+                            wxIds.size,
+                        ),
+                    )
+                },
+                dismissButton = { TextButton(onDismiss) { Text(stringResource(R.string.dialog_cancel)) } },
                 confirmButton = {
                     Button(onClick = {
                         onDismiss()
                         hideConversations(wxIds)
-                    }) { Text("隐藏") }
+                    }) { Text(stringResource(R.string.batch_hide_conversations_action)) }
                 }
             )
         }
@@ -78,7 +89,14 @@ object BatchHideConversations : ClickableFeature() {
                     if (WeConversationApi.hideConversation(wxId)) removed++
                 }
             }
-            showToastSuspend("已隐藏 $removed/${wxIds.size} 个对话")
+            showToastSuspend(
+                localizedBatchQuantity(
+                    R.plurals.batch_hide_conversations_done,
+                    wxIds.size,
+                    removed,
+                    wxIds.size,
+                ),
+            )
         }
     }
 }

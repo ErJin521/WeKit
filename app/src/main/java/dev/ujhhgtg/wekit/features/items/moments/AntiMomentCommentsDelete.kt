@@ -5,10 +5,11 @@ import android.database.Cursor
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.Modifiers
 import dev.ujhhgtg.reflekt.utils.isBuiltin
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.api.net.models.protobuf.SnsCommentActionProto
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.features.items.moments.AntiMomentCommentsDelete.INTERCEPTED_FLAG
 import dev.ujhhgtg.wekit.features.items.moments.AntiMomentCommentsDelete.INTERCEPT_MARKER
@@ -18,8 +19,12 @@ import dev.ujhhgtg.wekit.utils.reflection.BString
 import dev.ujhhgtg.wekit.utils.reflection.StrArr
 import dev.ujhhgtg.wekit.utils.reflection.int
 
-@Feature(name = "朋友圈评论防撤回", categories = ["朋友圈"], description = "拦截朋友圈评论删除并添加标记")
 object AntiMomentCommentsDelete : SwitchFeature(), IResolveDex {
+
+    override val technicalId = "朋友圈评论防撤回"
+    override val nameRes = R.string.feature_anti_moment_comments_delete_name
+    override val categoryIds = listOf(FeatureCategoryIds.MOMENTS)
+    override val descriptionRes = R.string.feature_anti_moment_comments_delete_description
 
     private const val TAG = "AntiMomentCommentsDelete"
 

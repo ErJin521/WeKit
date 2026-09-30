@@ -12,6 +12,12 @@
                   <project path="$PROJECT_DIR$/buildSrc" />
                 </projects>
               </build>
+              <build path="$PROJECT_DIR$/libs/common/scripta" name="scripta">
+                <projects>
+                  <project path="$PROJECT_DIR$/libs/common/scripta" />
+                  <project path="$PROJECT_DIR$/libs/common/scripta/editor" />
+                </projects>
+              </build>
             </builds>
           </compositeBuild>
         </compositeConfiguration>
@@ -28,7 +34,10 @@
             <option value="$PROJECT_DIR$/libs/common/annotation-scanner" />
             <option value="$PROJECT_DIR$/libs/common/bsh" />
             <option value="$PROJECT_DIR$/libs/common/reflekt" />
+            <option value="$PROJECT_DIR$/libs/common/scripta" />
+            <option value="$PROJECT_DIR$/libs/common/scripta/editor" />
             <option value="$PROJECT_DIR$/libs/common/stubs" />
+            <option value="$PROJECT_DIR$/libs/python-runtime-api" />
           </set>
         </option>
         <option name="myGradleHome" value="/usr/share/java/gradle" />

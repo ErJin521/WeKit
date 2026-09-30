@@ -1,43 +1,55 @@
 package dev.ujhhgtg.wekit.features.items.moments
 
+import android.app.Activity
+import android.content.Intent
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.clickable
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.RadioButton
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import dev.ujhhgtg.reflekt.utils.Modifiers
+import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
-import dev.ujhhgtg.wekit.features.api.ui.WeMomentsApi
+import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.preferences.WePrefs
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
+import dev.ujhhgtg.wekit.data.KvStore
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
-import dev.ujhhgtg.wekit.ui.content.Button
-import dev.ujhhgtg.wekit.ui.content.DefaultColumn
 import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.RadioButtonWidget
+import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.fs.asPath
 import dev.ujhhgtg.wekit.utils.reflection.BString
 import dev.ujhhgtg.wekit.utils.reflection.bool
 import kotlin.io.path.copyTo
 
-@Feature(
-    name = "上传原图",
-    categories = ["朋友圈"],
-    description = "上传时不压缩图片, 过大可能上传失败"
-)
 object NoCompressUploadedImages : ClickableFeature(), IResolveDex {
+
+    override val technicalId = "上传原图"
+    override val nameRes = R.string.feature_no_compress_uploaded_images_name
+    override val categoryIds = listOf(FeatureCategoryIds.MOMENTS)
+    override val descriptionRes = R.string.feature_no_compress_uploaded_images_description
 
     private const val MODE_CONVERT = 0
     private const val MODE_COPY = 1
 
-    private var selectedMode by WePrefs.prefOption("no_compress_mode", MODE_CONVERT)
+    private var selectedMode by KvStore.prefOption("no_compress_mode", MODE_CONVERT)
+
+    private val methodImagePreviewSend by dexMethod {
+        matcher {
+            declaredClass = "com.tencent.mm.plugin.gallery.ui.ImagePreviewUI"
+            paramTypes("android.content.Intent", "boolean", "boolean")
+            returnType = "void"
+            usingEqStrings("CropImage_OutputPath_List", "key_select_video_list")
+        }
+    }
 
     private val methodCreatePic by dexMethod {
         matcher {
@@ -62,7 +74,7 @@ object NoCompressUploadedImages : ClickableFeature(), IResolveDex {
     }
 
     private val vfsGetCachePathMethod by lazy {
-        WeMomentsApi.classVfs.reflekt().firstMethod {
+        WeMessageApi.classVfs.reflekt().firstMethod {
             modifiers(Modifiers.STATIC)
             parameters(BString, bool)
             returnType = BString
@@ -70,6 +82,35 @@ object NoCompressUploadedImages : ClickableFeature(), IResolveDex {
     }
 
     override fun onEnable() {
+        methodImagePreviewSend.hookBefore {
+            val activity = thisObject as Activity
+            if (activity.intent.getIntExtra("query_source_type", -1) != 4) return@hookBefore
+            // SnsUIAction opens the gallery with source 4. forTimeline=true forces
+            // compression and routes a single video through the video editor. Returning
+            // the selected file lists instead is also supported by SnsUIAction.
+            args[1] = false
+            args[2] = false
+            (args[0] as Intent).putExtra("CropImage_Compress_Img", false)
+        }
+
+        Activity::class.reflekt().firstMethod {
+            name = "setResult"
+            parameters(Int::class, Intent::class)
+        }.hookBefore {
+            val activity = thisObject as Activity
+            if (activity.javaClass.name !in GALLERY_RESULT_PAGES ||
+                activity.intent.getIntExtra("query_source_type", -1) != 4 ||
+                args[0] as Int != Activity.RESULT_OK
+            ) return@hookBefore
+            val data = args[1] as? Intent ?: return@hookBefore
+            if (data.hasExtra("CropImage_OutputPath_List") || data.hasExtra("key_select_video_list")) {
+                // Set these before the result is handed to the caller: the gallery writes
+                // key_delete_origin_file late, after constructing the image/video lists.
+                data.putExtra("CropImage_Compress_Img", false)
+                data.putExtra("key_delete_origin_file", false)
+            }
+        }
+
         methodCreatePic.hookBefore {
             if (selectedMode == MODE_CONVERT) {
                 val str6 = args[0] as? String ?: ""
@@ -102,42 +143,48 @@ object NoCompressUploadedImages : ClickableFeature(), IResolveDex {
         }
     }
 
+    private val GALLERY_RESULT_PAGES = setOf(
+        "com.tencent.mm.plugin.gallery.ui.ImagePreviewUI",
+        "com.tencent.mm.plugin.gallery.ui.AlbumPreviewUI",
+    )
+
     override fun onClick(context: ComponentActivity) {
         showComposeDialog(context) {
             var mode by remember { mutableIntStateOf(selectedMode) }
 
             AlertDialogContent(
-                title = { Text("上传原图") },
+                title = { Text(stringResource(R.string.moments_upload_original_title)) },
                 text = {
-                    DefaultColumn {
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                mode = MODE_CONVERT
-                            },
-                            trailingContent = { RadioButton(mode == MODE_CONVERT, null) },
-                            supportingContent = { Text("直接转换格式, 质量最高且速度快") },
-                            headlineContent = { Text("不压缩转换 (推荐)") },
-                        )
-
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                mode = MODE_COPY
-                            },
-                            trailingContent = { RadioButton(mode == MODE_COPY, null) },
-                            supportingContent = { Text("用原图覆盖压缩后的缓存") },
-                            headlineContent = { Text("原图覆盖") },
-                        )
+                    SegmentedColumn(contentPadding = PaddingValues(0.dp)) {
+                        item(key = MODE_CONVERT) {
+                            RadioButtonWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.moments_upload_original_convert),
+                                description = stringResource(R.string.moments_upload_original_convert_summary),
+                                selected = mode == MODE_CONVERT,
+                                onClick = {
+                                    mode = MODE_CONVERT
+                                    selectedMode = MODE_CONVERT
+                                },
+                            )
+                        }
+                        item(key = MODE_COPY) {
+                            RadioButtonWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.moments_upload_original_copy),
+                                description = stringResource(R.string.moments_upload_original_copy_summary),
+                                selected = mode == MODE_COPY,
+                                onClick = {
+                                    mode = MODE_COPY
+                                    selectedMode = MODE_COPY
+                                },
+                            )
+                        }
                     }
                 },
                 dismissButton = {
-                    TextButton(onDismiss) { Text("取消") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.dialog_close)) }
                 },
-                confirmButton = {
-                    Button(onClick = {
-                        selectedMode = mode
-                        onDismiss()
-                    }) { Text("确定") }
-                }
             )
         }
     }

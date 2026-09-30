@@ -1,12 +1,17 @@
 package dev.ujhhgtg.wekit.features.items.moments
 
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeDatabaseListenerApi
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.utils.WeLogger
 
-@Feature(name = "朋友圈查询增强", categories = ["朋友圈"], description = "显示历史撤回以及缓存过的朋友圈内容")
 object EnhanceQuery : SwitchFeature(), WeDatabaseListenerApi.IQueryListener {
+
+    override val technicalId = "朋友圈查询增强"
+    override val nameRes = R.string.feature_enhance_query_name
+    override val categoryIds = listOf(FeatureCategoryIds.MOMENTS)
+    override val descriptionRes = R.string.feature_enhance_query_description
 
     private const val TAG = "EnhanceQuery"
 

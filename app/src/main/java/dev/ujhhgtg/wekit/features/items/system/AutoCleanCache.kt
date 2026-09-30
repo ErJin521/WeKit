@@ -1,8 +1,9 @@
 package dev.ujhhgtg.wekit.features.items.system
 
 import androidx.activity.ComponentActivity
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToastSuspend
@@ -22,8 +23,12 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.time.Duration.Companion.milliseconds
 
-@Feature(name = "清理缓存垃圾", categories = ["系统与隐私"], description = "自动或手动清理微信的缓存")
 object AutoCleanCache : ClickableFeature() {
+
+    override val technicalId = "清理缓存垃圾"
+    override val nameRes = R.string.feature_auto_clean_cache_name
+    override val categoryIds = listOf(FeatureCategoryIds.SYSTEM_PRIVACY)
+    override val descriptionRes = R.string.feature_auto_clean_cache_description
 
     private const val TAG = "AutoCleanCache"
     private const val CLEAN_INTERVAL = 30 * 60 * 1000L // 每 30 分钟清理一次
@@ -106,10 +111,16 @@ object AutoCleanCache : ClickableFeature() {
             val sizeText = formatBytesSize(deletedSize)
 
             val timeText =
-                if (isEnabled) "\n下次自动清理将在 ${formatEpoch(System.currentTimeMillis() + CLEAN_INTERVAL)} 进行"
+                if (isEnabled) context.localizedSystemString(
+                    R.string.system_auto_clean_next,
+                    formatEpoch(System.currentTimeMillis() + CLEAN_INTERVAL)
+                )
                 else ""
 
-            showToastSuspend(context, "缓存清理完成, 共释放 $sizeText$timeText")
+            showToastSuspend(
+                context,
+                context.localizedSystemString(R.string.system_auto_clean_complete, sizeText, timeText)
+            )
 
             if (isEnabled) startCleaningJob()
         }

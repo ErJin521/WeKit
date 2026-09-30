@@ -4,7 +4,8 @@ import android.annotation.SuppressLint
 import android.content.ComponentName
 import com.tencent.tinker.loader.shareutil.ShareTinkerInternals
 import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.WeLogger
@@ -13,8 +14,12 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.Path
 import kotlin.io.path.deleteRecursively
 
-@Feature(name = "禁用微信热更新", categories = ["系统与隐私"], description = "禁止微信热更新, 避免被强制更新到不兼容版本")
 object DisableHostHotUpdates : SwitchFeature() {
+
+    override val technicalId = "禁用微信热更新"
+    override val nameRes = R.string.feature_disable_host_hot_updates_name
+    override val categoryIds = listOf(FeatureCategoryIds.SYSTEM_PRIVACY)
+    override val descriptionRes = R.string.feature_disable_host_hot_updates_description
 
     private val componentNames = listOf(
         "com.tencent.tinker.lib.service.TinkerPatchForeService",

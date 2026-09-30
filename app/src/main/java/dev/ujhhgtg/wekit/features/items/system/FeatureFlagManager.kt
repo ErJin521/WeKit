@@ -16,7 +16,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
+import androidx.compose.material3.LinearWavyProgressIndicator
+import androidx.compose.material3.Icon
+import dev.ujhhgtg.wekit.ui.utils.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -28,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -35,38 +38,42 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.createInstance
 import dev.ujhhgtg.reflekt.utils.toClass
+import dev.ujhhgtg.wekit.R
+import com.composables.icons.materialsymbols.MaterialSymbols
+import com.composables.icons.materialsymbols.outlined.Close
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexClass
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.features.items.system.FeatureFlagManager.cacheLock
-import dev.ujhhgtg.wekit.features.items.system.FeatureFlagManager.markCacheDirty
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
 import dev.ujhhgtg.wekit.ui.content.IconButton
 import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.DropDownMenuWidget
+import dev.ujhhgtg.wekit.ui.content.m3.DropdownOption
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
+import dev.ujhhgtg.wekit.ui.utils.ShowComposeDialogScope
 import dev.ujhhgtg.wekit.utils.WeLogger
+import dev.ujhhgtg.wekit.data.entity.FeatureFlagOverrideEntity
+import dev.ujhhgtg.wekit.data.WeKitDatabase
+import dev.ujhhgtg.wekit.data.JsonDataMigration
 import dev.ujhhgtg.wekit.utils.android.copyToClipboard
 import dev.ujhhgtg.wekit.utils.android.showToast
-import dev.ujhhgtg.wekit.utils.fs.KnownPaths
 import dev.ujhhgtg.wekit.utils.reflection.withDexKit
-import dev.ujhhgtg.wekit.utils.serialization.DefaultJson
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
-import kotlinx.serialization.Serializable
 import org.luckypray.dexkit.query.matchers.ClassMatcher
-import kotlin.io.path.div
-import kotlin.io.path.exists
-import kotlin.io.path.readText
-import kotlin.io.path.writeText
 import java.lang.reflect.Modifier as JavaModifier
 
 /**
@@ -83,10 +90,13 @@ import java.lang.reflect.Modifier as JavaModifier
  * API entry: [fd5.d1].[b](String key, Object defaultValue) — central get method.
  * Key format: fullKey = b() + '_' + h()    (via [ly4.e.l])
  */
-@Feature(name = "灰度测试管理器", categories = ["系统与隐私"], description = "覆盖微信灰度测试 (Feature Flag) 的值")
 object FeatureFlagManager : ClickableFeature(), IResolveDex {
 
-    private val overridesFile by lazy { KnownPaths.moduleData / "feature_flag_overrides.json" }
+    override val technicalId = "灰度测试管理器"
+    override val nameRes = R.string.feature_feature_flag_manager_name
+    override val categoryIds = listOf(FeatureCategoryIds.SYSTEM_PRIVACY)
+    override val descriptionRes = R.string.feature_feature_flag_manager_description
+
 
     /**
      * Base class for all feature flags: [ly4.e] (verified from WeChat 8.0.69).
@@ -129,7 +139,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
 
     private data class FlagDetails(
         val internalName: String = "",
-        val description: String = "(无)",
+        val description: String = "",
         val typeName: String = "",
         val configKey: String = ""
     )
@@ -157,97 +167,13 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
 
             FlagDetails(
                 internalName = internalName,
-                description = description.ifBlank { "(无)" },
+                description = description,
                 typeName = typeName,
                 configKey = configKey
             )
         }.getOrElse { e ->
             WeLogger.e(TAG, "failed to instantiate or inspect $className", e)
-            FlagDetails(description = "(无)")
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Override data model
-    // ---------------------------------------------------------------------------
-
-    @Serializable
-    private data class FeatureFlagOverride(
-        val runtimeKey: String,
-        val internalType: String,  // "i"|"f"|"l"|"s"
-        val rawValue: String
-    ) {
-        /** The runtime value to set as hook result. */
-        val value: Any
-            get() = when (internalType) {
-                "i" -> rawValue.toInt()
-                "f" -> rawValue.toFloat()
-                "l" -> rawValue.toLong()
-                "s" -> rawValue
-                else -> error("Unknown override type: $internalType")
-            }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Override persistence
-    // ---------------------------------------------------------------------------
-
-    /**
-     * Load overrides from JSON file.
-     */
-    private fun loadOverrides(): Map<String, FeatureFlagOverride> {
-        val file = overridesFile
-        if (!file.exists()) return emptyMap()
-        return runCatching {
-            val list = DefaultJson.decodeFromString<List<FeatureFlagOverride>>(file.readText())
-            list.associateBy { it.runtimeKey }
-        }.getOrElse { e ->
-            WeLogger.e(TAG, "failed to load $overridesFile", e)
-            emptyMap()
-        }
-    }
-
-    /**
-     * Persist overrides, then mark cache as dirty.
-     */
-    private fun saveOverrides(overrides: List<FeatureFlagOverride>) {
-        saveOverridesRaw(overrides)
-        markCacheDirty()
-    }
-
-    private fun saveOverridesRaw(overrides: List<FeatureFlagOverride>) {
-        runCatching {
-            overridesFile.writeText(DefaultJson.encodeToString(overrides))
-        }.onFailure { e ->
-            WeLogger.e(TAG, "failed to save $overridesFile", e)
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Live-reloadable override cache
-    // ---------------------------------------------------------------------------
-
-    @Volatile
-    private var overridesCache: Map<String, FeatureFlagOverride>? = null
-    private val cacheLock = Any()
-
-    /**
-     * Returns the override map, loading it on first use after a [markCacheDirty].
-     *
-     * The load itself must happen under [cacheLock]: this is called from the central flag getter
-     * hook, which WeChat invokes concurrently from many threads during startup. If the load throws,
-     * nothing is cached, so the next caller simply retries instead of latching a broken state.
-     */
-    private fun getOverrides(): Map<String, FeatureFlagOverride> {
-        overridesCache?.let { return it }
-        return synchronized(cacheLock) {
-            overridesCache ?: loadOverrides().also { overridesCache = it }
-        }
-    }
-
-    private fun markCacheDirty() {
-        synchronized(cacheLock) {
-            overridesCache = null
+            FlagDetails()
         }
     }
 
@@ -255,10 +181,20 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
     // Hook
     // ---------------------------------------------------------------------------
 
+    @Volatile
+    private var overrides: Map<String, FeatureFlagOverrideEntity> = emptyMap()
+
+    private fun loadOverrides() = runBlocking(Dispatchers.IO) {
+        JsonDataMigration.requireCompleted("feature_flags", "overrides")
+        val saved = WeKitDatabase.instance.simpleStructuredDao().getFlagOverrides()
+        overrides = saved.associateBy { it.runtimeKey }
+    }
+
     override fun onEnable() {
+        loadOverrides()
         methodRepairerConfigApiGet.hookBefore {
             val key = args[0] as? String ?: return@hookBefore
-            val override = getOverrides()[key] ?: return@hookBefore
+            val override = overrides[key] ?: return@hookBefore
             result = override.value
         }
     }
@@ -268,6 +204,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
     // ---------------------------------------------------------------------------
 
     override fun onClick(context: ComponentActivity) {
+        loadOverrides()
         showComposeDialog(context) {
             FeatureFlagManagerDialog(onDismiss = onDismiss)
         }
@@ -362,7 +299,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
         val context = LocalContext.current
 
         AlertDialogContent(
-            title = { Text("灰度测试管理器") },
+            title = { Text(stringResource(R.string.feature_feature_flag_manager_name)) },
             text = {
                 Column(
                     modifier = Modifier
@@ -425,7 +362,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
             },
             confirmButton = {
                 TextButton(onClick = onDismiss) {
-                    Text("关闭")
+                    Text(stringResource(R.string.action_close))
                 }
             }
         )
@@ -441,7 +378,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularWavyProgressIndicator()
                 Spacer(Modifier.height(8.dp))
-                Text("正在扫描灰度测试类, 请稍等...")
+                Text(stringResource(R.string.system_feature_flags_scanning))
             }
         }
     }
@@ -453,7 +390,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
                 .fillMaxWidth()
                 .weight(1f), contentAlignment = Alignment.Center
         ) {
-            Text("未找到灰度测试类", style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(R.string.system_feature_flags_empty), style = MaterialTheme.typography.bodyMedium)
         }
     }
 
@@ -464,7 +401,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
                 .fillMaxWidth()
                 .weight(1f), contentAlignment = Alignment.Center
         ) {
-            Text("未找到匹配的类或功能", style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(R.string.system_feature_flags_no_match), style = MaterialTheme.typography.bodyMedium)
         }
     }
 
@@ -480,12 +417,15 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 8.dp),
-            placeholder = { Text("搜索类名或功能简介...") },
+            placeholder = { Text(stringResource(R.string.system_feature_flags_search_hint)) },
             singleLine = true,
             trailingIcon = {
                 if (query.isNotEmpty()) {
                     IconButton(onClick = onClear) {
-                        Text("×")
+                        Icon(
+                            MaterialSymbols.Outlined.Close,
+                            contentDescription = stringResource(R.string.action_close),
+                        )
                     }
                 }
             }
@@ -527,7 +467,7 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
             modifier = modifier
                 .fillMaxWidth()
                 .clickable(onClick = onClick),
-            headlineContent = {
+            content = {
                 Text(
                     text = className.substringAfterLast('.'),
                     style = MaterialTheme.typography.bodyLarge
@@ -535,7 +475,9 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
             },
             supportingContent = {
                 Text(
-                    text = details?.description ?: "加载中...",
+                    text = details?.description?.ifBlank {
+                        stringResource(R.string.system_none)
+                    } ?: stringResource(R.string.system_loading),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -563,7 +505,9 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
 
         val currentDetails = details ?: FlagDetails()
         val internalName = currentDetails.internalName
-        val description = currentDetails.description
+        val description = currentDetails.description.ifBlank {
+            stringResource(R.string.system_none)
+        }
         val typeName = currentDetails.typeName
         val configKey = currentDetails.configKey
 
@@ -587,28 +531,28 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.large)
                 ) {
-                    CopyInfoItem("复制完整类名", className)
-                    CopyInfoItem("复制功能内部名称", internalName)
-                    CopyInfoItem("复制功能简介", description)
-                    CopyInfoItem("复制配置键名", configKey)
+                    CopyInfoItem(stringResource(R.string.system_feature_flags_copy_class), className)
+                    CopyInfoItem(stringResource(R.string.system_feature_flags_copy_internal_name), internalName)
+                    CopyInfoItem(stringResource(R.string.system_feature_flags_copy_description), description)
+                    CopyInfoItem(stringResource(R.string.system_feature_flags_copy_config_key), configKey)
 
                     ListItem(
                         modifier = Modifier.clickable {
                             if (runtimeKey == null) {
-                                showToast("无法解析该灰度测试项的键名")
+                                showToast(localizedSystemString(R.string.system_feature_flags_key_unavailable))
                                 return@clickable
                             }
                             onOpenOverrideDialog(runtimeKey, effectiveTypeName)
                         },
-                        supportingContent = { Text("为该灰度测试项覆盖其当前取值") },
-                        headlineContent = {
-                            Text("覆盖功能取值", style = MaterialTheme.typography.bodyLarge)
+                        supportingContent = { Text(stringResource(R.string.system_feature_flags_override_summary)) },
+                        content = {
+                            Text(stringResource(R.string.system_feature_flags_override), style = MaterialTheme.typography.bodyLarge)
                         },
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.dialog_close)) }
             }
         )
     }
@@ -620,14 +564,14 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
         ListItem(
             modifier = Modifier.clickable { copyToClipboard(context, value) },
             supportingContent = { Text(value) },
-            headlineContent = { Text(label, style = MaterialTheme.typography.bodyLarge) },
+            content = { Text(label, style = MaterialTheme.typography.bodyLarge) },
         )
     }
 
     private const val TAG = "FeatureFlagManager"
 
     @Composable
-    private fun OverrideValueDialog(
+    private fun ShowComposeDialogScope.OverrideValueDialog(
         runtimeKey: String,
         typeName: String,
         onDismiss: () -> Unit
@@ -642,98 +586,126 @@ object FeatureFlagManager : ClickableFeature(), IResolveDex {
         }
 
         val existingOverride = remember {
-            getOverrides()[runtimeKey]
+            overrides[runtimeKey]
         }
 
         var type by remember { mutableStateOf(existingOverride?.internalType ?: defaultTypeChar) }
         var rawValue by remember { mutableStateOf(existingOverride?.rawValue ?: "") }
+        var saving by remember { mutableStateOf(false) }
+        var saveFailed by remember { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
+
+        fun submit(action: suspend () -> Unit) {
+            saving = true
+            saveFailed = false
+            dialog.setCancelable(false)
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { action() }
+                    onDismiss()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    WeLogger.e(TAG, "failed to commit feature flag override", e)
+                    saveFailed = true
+                } finally {
+                    saving = false
+                    dialog.setCancelable(true)
+                }
+            }
+        }
 
         AlertDialogContent(
-            title = { Text("设置覆盖值") },
+            title = { Text(stringResource(R.string.system_feature_flags_set_override)) },
             text = {
                 Column {
-                    TextField(
+                    DropDownMenuWidget(
+                        title = stringResource(R.string.system_feature_flags_type),
+                        description = null,
                         value = type,
+                        options = listOf(
+                            DropdownOption("i", "Int"),
+                            DropdownOption("f", "Float"),
+                            DropdownOption("l", "Long"),
+                            DropdownOption("s", "String"),
+                        ),
+                        enabled = !saving,
                         onValueChange = { type = it },
-                        singleLine = true,
-                        label = { Text("类型 ([s]tring/[f]loat/[i]nt/[l]ong)") }
                     )
                     Spacer(Modifier.height(8.dp))
                     TextField(
                         value = rawValue,
+                        enabled = !saving,
                         onValueChange = { rawValue = it },
                         singleLine = true,
-                        label = { Text("值") }
+                        label = { Text(stringResource(R.string.system_feature_flags_value)) }
                     )
+                    if (saving) {
+                        LinearWavyProgressIndicator(Modifier.fillMaxWidth())
+                        Text(stringResource(R.string.structured_storage_saving))
+                    }
+                    if (saveFailed) {
+                        Text(stringResource(R.string.structured_storage_save_failed), color = MaterialTheme.colorScheme.error)
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("取消") }
-                TextButton(onClick = {
-                    val overrides = loadOverrides().values.toMutableList()
-                    val existingIndex = overrides.indexOfFirst { it.runtimeKey == runtimeKey }
-                    if (existingIndex == -1) {
-                        WeLogger.i(TAG, "override not found for $runtimeKey, nothing to clear")
-                        showToast("未找到该灰度测试的覆盖值!")
+                TextButton(onClick = onDismiss, enabled = !saving) { Text(stringResource(R.string.dialog_cancel)) }
+                TextButton(enabled = !saving, onClick = {
+                    if (overrides[runtimeKey] == null) {
+                        showToast(localizedSystemString(R.string.system_feature_flags_override_not_found))
                         return@TextButton
                     }
-                    WeLogger.i(TAG, "removing override for $runtimeKey")
-                    overrides.removeAt(existingIndex)
-                    saveOverrides(overrides)
-                    onDismiss()
-                }) { Text("清除") }
+                    submit {
+                        WeKitDatabase.instance.simpleStructuredDao().removeFlagOverride(runtimeKey)
+                        overrides = overrides - runtimeKey
+                    }
+                }) { Text(stringResource(R.string.action_clear)) }
             },
             confirmButton = {
-                Button(onClick = {
+                Button(enabled = !saving, onClick = {
                     val rawValueStr = rawValue
                     // Validate value based on type
                     val validated = when (type) {
-                        "s", "string" -> FeatureFlagOverride(runtimeKey, "s", rawValueStr)
+                        "s", "string" -> FeatureFlagOverrideEntity(runtimeKey, "s", rawValueStr)
                         "i", "int" -> {
                             val v = rawValueStr.toIntOrNull()
                             if (v == null) {
-                                showToast("值格式不正确, 请重新输入")
+                                showToast(localizedSystemString(R.string.system_feature_flags_invalid_value))
                                 return@Button
                             }
-                            FeatureFlagOverride(runtimeKey, "i", rawValueStr)
+                            FeatureFlagOverrideEntity(runtimeKey, "i", rawValueStr)
                         }
 
                         "l", "long" -> {
                             val v = rawValueStr.toLongOrNull()
                             if (v == null) {
-                                showToast("值格式不正确, 请重新输入")
+                                showToast(localizedSystemString(R.string.system_feature_flags_invalid_value))
                                 return@Button
                             }
-                            FeatureFlagOverride(runtimeKey, "l", rawValueStr)
+                            FeatureFlagOverrideEntity(runtimeKey, "l", rawValueStr)
                         }
 
                         "f", "float" -> {
                             val v = rawValueStr.toFloatOrNull()
                             if (v == null) {
-                                showToast("值格式不正确, 请重新输入")
+                                showToast(localizedSystemString(R.string.system_feature_flags_invalid_value))
                                 return@Button
                             }
-                            FeatureFlagOverride(runtimeKey, "f", rawValueStr)
+                            FeatureFlagOverrideEntity(runtimeKey, "f", rawValueStr)
                         }
 
                         else -> {
-                            showToast("类型格式不正确, 请重新输入")
+                            showToast(localizedSystemString(R.string.system_feature_flags_invalid_type))
                             return@Button
                         }
                     }
 
-                    val overrides = loadOverrides().values.toMutableList()
-                    val existingIndex = overrides.indexOfFirst { it.runtimeKey == runtimeKey }
-                    if (existingIndex == -1) {
-                        WeLogger.i(TAG, "adding new override for $runtimeKey")
-                        overrides.add(validated)
-                    } else {
-                        WeLogger.i(TAG, "updating override for $runtimeKey")
-                        overrides[existingIndex] = validated
+                    submit {
+                        WeKitDatabase.instance.simpleStructuredDao().putFlagOverride(validated)
+                        overrides = overrides + (runtimeKey to validated)
                     }
-                    saveOverrides(overrides)
-                    onDismiss()
-                }) { Text("确定") }
+                }) { Text(stringResource(R.string.dialog_confirm)) }
             }
         )
     }

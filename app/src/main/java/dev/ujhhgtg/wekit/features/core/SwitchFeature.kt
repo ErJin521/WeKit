@@ -1,11 +1,13 @@
 package dev.ujhhgtg.wekit.features.core
 
 import android.content.Context
-import dev.ujhhgtg.wekit.preferences.WePrefs
-import dev.ujhhgtg.wekit.utils.TargetProcesses
+import dev.ujhhgtg.wekit.data.KvStore
 import dev.ujhhgtg.wekit.utils.WeLogger
 
 abstract class SwitchFeature : BaseFeature() {
+
+    /** Optional order override within each concrete settings category. Lower values appear first. */
+    open val displayOrder: Int? = null
 
     /**
      * Default state when the user has never toggled this feature.
@@ -15,17 +17,15 @@ abstract class SwitchFeature : BaseFeature() {
      */
     open val defaultEnabled: Boolean = false
 
-    /** Whether this feature should load in the current process. Defaults to the main process only. */
-    protected open val shouldLoadInCurrentProcess: Boolean
-        get() = TargetProcesses.isInMain
-
     /** Whether the feature should be active at startup, given the cached preference. */
     protected open val shouldEnableOnStartup: Boolean
         get() = _isEnabled
 
+    fun loadPersistedState() {
+        _isEnabled = KvStore.getBoolOrDef(technicalId, defaultEnabled)
+    }
+
     final override fun startup() {
-        if (!shouldLoadInCurrentProcess) return
-        _isEnabled = WePrefs.getBoolOrDef(name, defaultEnabled)
         if (shouldEnableOnStartup) enable()
     }
 
@@ -39,10 +39,10 @@ abstract class SwitchFeature : BaseFeature() {
             if (_isEnabled == value) return
             _isEnabled = value
             if (value) {
-                WeLogger.i("SwitchFeature", "enabling $displayName...")
+                WeLogger.i("SwitchFeature", "enabling $technicalPath...")
                 enable()
             } else {
-                WeLogger.i("SwitchFeature", "disabling $displayName...")
+                WeLogger.i("SwitchFeature", "disabling $technicalPath...")
                 disable()
             }
         }
@@ -56,7 +56,7 @@ abstract class SwitchFeature : BaseFeature() {
     }
 
     fun applyToggle(newState: Boolean) {
-        WePrefs.putBool(name, newState)
+        KvStore.putBool(technicalId, newState)
         isEnabled = newState
         toggleCompletionCallback?.run()
     }

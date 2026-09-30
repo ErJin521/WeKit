@@ -8,6 +8,7 @@ import dev.ujhhgtg.wekit.agent.model.LlmRole
 import dev.ujhhgtg.wekit.agent.model.LlmStreamEvent
 import dev.ujhhgtg.wekit.agent.model.LlmToolCall
 import dev.ujhhgtg.wekit.agent.model.LlmToolSpec
+import dev.ujhhgtg.wekit.agent.tool.PermissionLevel
 import dev.ujhhgtg.wekit.agent.tool.ToolLoadingMode
 import dev.ujhhgtg.wekit.agent.tool.ToolRegistry
 import dev.ujhhgtg.wekit.agent.tool.WireTool
@@ -37,7 +38,6 @@ class TurnConfig(
     /** Globally-enabled conditional prompts (regex-matched against each reply). */
     val conditionalPrompts: List<ConditionalPromptEntity>,
     val toolLoadingMode: ToolLoadingMode,
-    val maxModelRequests: Int,
     /** Per-model max output tokens, or null to omit the field (provider default). */
     val maxTokens: Int? = null,
     /**
@@ -60,8 +60,8 @@ class TurnConfig(
 /**
  * The Agent Loop (§2). Given the prior conversation and a new user message, it repeatedly calls the
  * model, executes any tool calls it returns (gated by [ApprovalGateway] and persisted via
- * [historySink]), feeds results back, and loops until the model returns no tool call, an error
- * occurs, or the per-turn request cap is hit.
+ * [historySink]), feeds results back, and loops until the model returns no tool call or an error
+ * occurs.
  *
  * The loop is transport-agnostic: it works in provider-neutral [LlmMessage] space and delegates
  * wire translation to the [LlmClient]. It emits [AgentEvent]s for the UI as a cold [Flow]; cancel
@@ -72,7 +72,10 @@ class AgentSessionEngine(
     private val approvalGateway: ApprovalGateway,
     private val promptComposer: PromptComposer,
     private val historySink: HistorySink,
+    /** Resolves the session's permission level per tool call, so level changes apply immediately. */
+    private val permissionLevel: suspend () -> PermissionLevel,
 ) {
+    private val toolCallExecutor = ToolCallExecutor(registry, approvalGateway, permissionLevel)
     /**
      * Persists conversation state as the loop advances. Implemented over Room by WeAgentService;
      * kept as an interface so the engine has no direct DB dependency and stays testable.
@@ -116,15 +119,6 @@ class AgentSessionEngine(
             while (true) {
                 currentCoroutineContext().ensureActive()
 
-                // The request cap is checked BEFORE the steer-hook fires: the hook consumes the
-                // queued message atomically (and the UI has already cleared the input bar), so
-                // fetching it above the cap check silently swallowed the user's text — never sent,
-                // never persisted.
-                if (requestIndex >= config.maxModelRequests) {
-                    send(AgentEvent.MaxRequestsReached(config.maxModelRequests))
-                    return@channelFlow
-                }
-
                 // Steer-hook: inject a transient user message from the queued-mechanism before the
                 // next API request (not persisted — purely ephemeral steering input).
                 val steerText = config.onFetchSteerMessage?.invoke()?.takeIf { it.isNotBlank() }
@@ -141,6 +135,7 @@ class AgentSessionEngine(
                 val request = dev.ujhhgtg.wekit.agent.model.LlmRequest(
                     modelIdRemote = config.modelIdRemote,
                     messages = pruneStaleImages(messages),
+                    sessionId = currentCoroutineContext()[AgentSessionContext]!!.sessionId,
                     tools = wireTools.map { it.toSpec() },
                     reasoningEffort = config.reasoningEffort,
                     customJsonOverride = config.customJsonOverride,
@@ -188,7 +183,7 @@ class AgentSessionEngine(
                     val reminders = promptComposer.matchConditionalPrompts(
                         config.conditionalPrompts, assistant.content.orEmpty()
                     )
-                    if (reminders.isNotEmpty() && requestIndex < config.maxModelRequests) {
+                    if (reminders.isNotEmpty()) {
                         reminders.forEach { messages += LlmMessage(role = LlmRole.USER, content = it) }
                         continue
                     }
@@ -200,12 +195,21 @@ class AgentSessionEngine(
                 for (call in assistant.toolCalls) {
                     currentCoroutineContext().ensureActive()
                     send(AgentEvent.ToolCallStarted(call.id, call.name, call.argumentsJson))
-                    val (text, status, providerId) = executeToolCall(call, assistant.content, discovered, config.toolVisibility) { toolName ->
-                        send(AgentEvent.ToolAwaitingApproval(call.id, toolName))
+                    val result = if (call.name == ToolRegistry.DISCOVER_TOOLS_NAME) {
+                        ToolCallExecutor.Result(
+                            ToolDiscovery.handle(registry, parseArgs(call.argumentsJson), discovered, config.toolVisibility),
+                            ApprovalStatus.AUTO_ALLOWED,
+                            "builtin",
+                        )
+                    } else {
+                        toolCallExecutor.execute(call, ToolCallExecutor.Context(
+                            modelExplanation = assistant.content,
+                            visibility = config.toolVisibility,
+                        ) { toolName -> send(AgentEvent.ToolAwaitingApproval(call.id, toolName)) })
                     }
-                    messages += LlmMessage(role = LlmRole.TOOL, content = text, toolCallId = call.id)
-                    historySink.onToolResult(call.id, call.name, providerId, call.argumentsJson, text, status)
-                    send(AgentEvent.ToolCallFinished(call.id, call.name, status, text))
+                    messages += LlmMessage(role = LlmRole.TOOL, content = result.text, toolCallId = call.id)
+                    historySink.onToolResult(call.id, call.name, result.providerId, call.argumentsJson, result.text, result.status)
+                    send(AgentEvent.ToolCallFinished(call.id, call.name, result.status, result.text))
                 }
 
                 // Vision: a tool (ui-screenshot) may have staged images into the UiImageSink this
@@ -251,7 +255,7 @@ class AgentSessionEngine(
      * Context economy: screenshots staged by `ui-screenshot` are appended to the working message list
      * and would otherwise be re-sent on **every** later request of the same turn. In the intended
      * screenshot → tap → screenshot loop that grows quadratically — by round 10 the body also carries
-     * the 9 stale screenshots, each a few hundred KB of base64, and `maxModelRequests` defaults to 50.
+     * the 9 stale screenshots, each a few hundred KB of base64.
      *
      * So only the most recent image message keeps its payload; earlier ones are replaced by a short
      * note. Text (tool results, narration) is never touched — only the image payloads are dropped.
@@ -268,57 +272,6 @@ class AgentSessionEngine(
                 content = "（已省略 ${m.images.size} 张较早的界面截图，只保留最近一次截图以节省上下文）",
                 images = emptyList(),
             )
-        }
-    }
-
-    /**
-     * Handles one tool call end-to-end: the discover_tools meta-tool, permission gating, and
-     * execution. Returns (resultText, approvalStatus, providerId).
-     */
-    private suspend fun executeToolCall(
-        call: LlmToolCall,
-        modelExplanation: String?,
-        discovered: MutableSet<String>,
-        visibility: dev.ujhhgtg.wekit.agent.tool.ToolVisibility,
-        onAwaitingApproval: suspend (String) -> Unit,
-    ): Triple<String, ApprovalStatus, String> {
-        val args = parseArgs(call.argumentsJson)
-
-        // discover_tools meta-tool (§3.3): handled by the engine, always allowed.
-        if (call.name == ToolRegistry.DISCOVER_TOOLS_NAME) {
-            val text = ToolDiscovery.handle(registry, args, discovered, visibility)
-            return Triple(text, ApprovalStatus.AUTO_ALLOWED, "builtin")
-        }
-
-        val tool = registry.findByExposedName(call.name, visibility)
-            ?: return Triple("Unknown tool: ${call.name}", ApprovalStatus.AUTO_ALLOWED, "")
-
-        if (tool.mode == dev.ujhhgtg.wekit.agent.tool.ToolMode.MANUAL_APPROVAL) onAwaitingApproval(call.name)
-
-        val decision = approvalGateway.decide(
-            mode = tool.mode,
-            toolName = tool.exposedName,
-            providerName = tool.provider.name,
-            argumentsJson = call.argumentsJson,
-            modelExplanation = modelExplanation,
-        )
-
-        return when (decision) {
-            is ApprovalDecision.Allowed -> {
-                val status = when (tool.mode) {
-                    dev.ujhhgtg.wekit.agent.tool.ToolMode.MANUAL_APPROVAL -> ApprovalStatus.USER_APPROVED
-                    dev.ujhhgtg.wekit.agent.tool.ToolMode.SMART_APPROVAL -> ApprovalStatus.AI_APPROVED
-                    else -> ApprovalStatus.AUTO_ALLOWED
-                }
-                val result = runCatching { registry.execute(tool, args) }
-                    .getOrElse { "工具执行失败：${it.message ?: it.javaClass.simpleName}" }
-                Triple(result, status, tool.provider.id)
-            }
-
-            is ApprovalDecision.Denied -> {
-                val status = if (decision.bySmartReview) ApprovalStatus.AI_REJECTED else ApprovalStatus.USER_REJECTED
-                Triple(approvalGateway.deniedResultText(decision), status, tool.provider.id)
-            }
         }
     }
 

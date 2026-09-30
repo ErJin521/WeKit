@@ -1,15 +1,40 @@
 package dev.ujhhgtg.wekit.features.items.chat
 
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+import dev.ujhhgtg.wekit.dexkit.dsl.data
 import dev.ujhhgtg.wekit.dexkit.dsl.dexClass
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.features.core.SwitchFeature
+import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
+import dev.ujhhgtg.wekit.features.core.ClickableFeature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
+import dev.ujhhgtg.wekit.data.KvStore.prefOption
+import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
+import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
+import dev.ujhhgtg.wekit.ui.content.m3.SwitchWidget
+import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.enumValueOfClass
 
-@Feature(name = "引用消息直达", categories = ["聊天"], description = "点击被引用消息时直接跳转至对应消息")
-object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
+object QuotedMessageDirectJump : ClickableFeature(), IResolveDex {
+
+    override val technicalId = "引用消息直达"
+    override val nameRes = R.string.feature_quoted_message_direct_jump_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_quoted_message_direct_jump_description
+
+    private var messageListDirectJump by prefOption("chat_quoted_direct_jump_message_list", true)
+    private var inputBoxDirectJump by prefOption("chat_quoted_direct_jump_input_box", true)
 
     private val methodClickEvent by dexMethod {
         searchPackages("com.tencent.mm.ui.chatting.viewitems")
@@ -22,7 +47,7 @@ object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
     }
     private val methodClickToPositionEvent by dexMethod {
         matcher {
-            declaredClass(methodClickEvent.method.declaringClass)
+            declaredClass(methodClickEvent.data.declaredClassName)
             usingEqStrings(
                 "MicroMsg.msgquote.QuoteMsgSourceClickLogic",
                 "handleItemClickToPositionEvent,quotedMsg is null!"
@@ -31,7 +56,7 @@ object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
     }
     private val methodGetQuoteMessageInfo by dexMethod {
         matcher {
-            declaredClass(methodClickEvent.method.declaringClass)
+            declaredClass(methodClickEvent.data.declaredClassName)
             usingStrings(
                 "MicroMsg.msgquote.QuoteMsgSourceClickLogic",
                 "%s msgId:%s msgSvrId:%s"
@@ -43,20 +68,12 @@ object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
             usingEqStrings("QuoteLongClickFromQuoteView", "QuoteClickFromTextPreviewLocateView")
         }
     }
-    private val classChattingContext by dexClass {
-        matcher {
-            usingEqStrings("MicroMsg.ChattingContext", "[notifyDataSetChange]")
-        }
-    }
-    private val methodChattingContextGetTalker by dexMethod {
-        matcher {
-            declaredClass(classChattingContext.clazz)
-            usingEqStrings("getTalker returns null.")
-        }
-    }
-
     override fun onEnable() {
         methodClickEvent.hookBefore {
+            val isInputBox = args[1] == null
+            val shouldDirectJump = if (isInputBox) inputBoxDirectJump else messageListDirectJump
+            if (!shouldDirectJump) return@hookBefore
+
             val chattingContext = args[0]
             val view = args[2]
             val longValue = args[3]
@@ -64,14 +81,14 @@ object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
             val msgQuoteItem = args[5]
             val chattingItemHolder = args[7]!!
             val chattingItem = chattingItemHolder.reflekt()
-                .firstField { type { it != String::class.java } }.get()!!
+                .firstField { type { it != String::class.java } }.get()
             val mGetQuoteMessageInfo = methodGetQuoteMessageInfo.method
             var msgInfo: Any
             if (mGetQuoteMessageInfo.parameterCount == 6) {
                 msgInfo = mGetQuoteMessageInfo.invoke(
                     null,
                     false /* isGroupChat: this arg is ignored */,
-                    methodChattingContextGetTalker.method.invoke(chattingContext),
+                    WeMessageApi.methodChattingContextGetTalker.method.invoke(chattingContext),
                     longValue,
                     stringValue,
                     msgQuoteItem,
@@ -81,7 +98,7 @@ object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
                 msgInfo = mGetQuoteMessageInfo.invoke(
                     null,
                     false /* isGroupChat: this arg is ignored */,
-                    methodChattingContextGetTalker.method.invoke(chattingContext),
+                    WeMessageApi.methodChattingContextGetTalker.method.invoke(chattingContext),
                     longValue,
                     msgQuoteItem,
                     "handleQuoteMsgClick" /* hardcoded in original code */
@@ -113,6 +130,46 @@ object QuotedMessageDirectJump : SwitchFeature(), IResolveDex {
                 )
             }
             result = null
+        }
+    }
+
+    override fun onClick(context: ComponentActivity) {
+        showComposeDialog(context) {
+            var messageList by remember { mutableStateOf(messageListDirectJump) }
+            var inputBox by remember { mutableStateOf(inputBoxDirectJump) }
+
+            AlertDialogContent(
+                title = { Text(stringResource(R.string.feature_quoted_message_direct_jump_name)) },
+                text = {
+                    SegmentedColumn(contentPadding = PaddingValues(0.dp)) {
+                        item {
+                            SwitchWidget(
+                                title = stringResource(R.string.chat_quote_jump_message_list),
+                                description = stringResource(R.string.chat_quote_jump_message_list_description),
+                                checked = messageList,
+                                onCheckedChange = {
+                                    messageList = it
+                                    messageListDirectJump = it
+                                },
+                            )
+                        }
+                        item {
+                            SwitchWidget(
+                                title = stringResource(R.string.chat_quote_jump_input_box),
+                                description = stringResource(R.string.chat_quote_jump_input_box_description),
+                                checked = inputBox,
+                                onCheckedChange = {
+                                    inputBox = it
+                                    inputBoxDirectJump = it
+                                },
+                            )
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(onDismiss) { Text(stringResource(R.string.dialog_close)) }
+                },
+            )
         }
     }
 }

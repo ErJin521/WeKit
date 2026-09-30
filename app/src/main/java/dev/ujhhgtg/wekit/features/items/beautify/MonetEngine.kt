@@ -14,8 +14,9 @@ import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.toClass
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.core.ApiFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.items.beautify.MonetEngine.DEFAULT_COLOR
 import dev.ujhhgtg.wekit.features.items.beautify.MonetEngine.primaryColor
 import dev.ujhhgtg.wekit.ui.utils.theme.SeedResolver
@@ -34,8 +35,12 @@ import dev.ujhhgtg.wekit.utils.android.isDarkMode
  * through the selected palette style + color spec). Colors are resolved once per WeChat launch
  * (restart required for a change to apply).
  */
-@Feature(name = "莫奈引擎", categories = ["API"], description = "根据模块设置的自定义配色为微信原生组件上色")
 object MonetEngine : ApiFeature() {
+
+    override val technicalId = "莫奈引擎"
+    override val nameRes = R.string.feature_monet_engine_name
+    override val categoryIds = listOf(FeatureCategoryIds.API)
+    override val descriptionRes = R.string.feature_monet_engine_description
 
     private const val TAG = "MonetEngine"
 
@@ -54,8 +59,12 @@ object MonetEngine : ApiFeature() {
     private val onPrimaryColor by lazy { scheme.onPrimary.toArgb() }
 
     override fun onEnable() {
-        if (!(ThemeSettings.applyToWechat && ThemeSettings.customColor)) {
+        if (!ThemeSettings.applyToWechat) {
             WeLogger.i(TAG, "apply-to-wechat off, not recoloring")
+            return
+        }
+        if (MonetEngineModuleGenerator.isEnabled) {
+            WeLogger.i(TAG, "module generator enabled, leaving WeChat recoloring to the RRO module")
             return
         }
 

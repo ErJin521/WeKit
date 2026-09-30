@@ -5,42 +5,42 @@ import android.view.ViewGroup
 import android.widget.ListView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.clickable
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.Switch
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.core.view.isGone
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.preferences.WePrefs
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
+import dev.ujhhgtg.wekit.data.KvStore
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
-import dev.ujhhgtg.wekit.ui.content.Button
-import dev.ujhhgtg.wekit.ui.content.DefaultColumn
 import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
+import dev.ujhhgtg.wekit.ui.content.m3.SwitchWidget
 import dev.ujhhgtg.wekit.ui.utils.findViewsWhich
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import java.util.Collections
 import java.util.WeakHashMap
 
 
-@Feature(
-    name = "「我」页面精简",
-    categories = ["界面美化"],
-    description = "精简我的页面的部分组件",
-)
 object HideMeTabPageItems : ClickableFeature(), IResolveDex {
 
-    private var hideMoments by WePrefs.prefOption("hide_me_moments", false)
-    private var hideFinder by WePrefs.prefOption("hide_me_finder", false)
-    private var hideCards by WePrefs.prefOption("hide_me_cards", false)
-    private var hideEmoji by WePrefs.prefOption("hide_me_emoji", false)
+    override val technicalId = "「我」页面精简"
+    override val nameRes = R.string.feature_hide_me_tab_page_items_name
+    override val categoryIds = listOf(FeatureCategoryIds.BEAUTIFY)
+    override val descriptionRes = R.string.feature_hide_me_tab_page_items_description
+
+    private var hideMoments by KvStore.prefOption("hide_me_moments", false)
+    private var hideFinder by KvStore.prefOption("hide_me_finder", false)
+    private var hideCards by KvStore.prefOption("hide_me_cards", false)
+    private var hideEmoji by KvStore.prefOption("hide_me_emoji", false)
 
     private val methodOnViewCreated by dexMethod {
         matcher {
@@ -72,7 +72,7 @@ object HideMeTabPageItems : ClickableFeature(), IResolveDex {
     private fun applyEntryRules(root: ViewGroup) {
         val targets = selectedTargets
         if (targets.isEmpty()) return
-        root.findViewsWhich<TextView> { it is TextView && it.text?.toString()?.trim().orEmpty() in targets }.forEach {
+        root.findViewsWhich { it is TextView && it.text?.toString()?.trim().orEmpty() in targets }.forEach {
             hideContainerFor(it)
         }
     }
@@ -85,67 +85,59 @@ object HideMeTabPageItems : ClickableFeature(), IResolveDex {
             var hideEmojiInput by remember { mutableStateOf(hideEmoji) }
 
             AlertDialogContent(
-                title = { Text("「我」页面精简") },
+                title = { Text(stringResource(R.string.beautify_me_page_title)) },
                 text = {
-                    DefaultColumn {
-                        ListItem(
-                            modifier = Modifier.clickable { hideMomentsInput = !hideMomentsInput },
-                            trailingContent = {
-                                Switch(
-                                    checked = hideMomentsInput,
-                                    onCheckedChange = null
-                                )
-                            },
-                            headlineContent = { Text("隐藏朋友圈标签") },
-                        )
-                        ListItem(
-                            modifier = Modifier.clickable { hideFinderInput = !hideFinderInput },
-                            leadingContent = null,
-                            trailingContent = {
-                                Switch(
-                                    checked = hideFinderInput,
-                                    onCheckedChange = null
-                                )
-                            },
-                            supportingContent = { Text("取决于微信版本, 可能为「视频号」「视频号和公众号」「作品」") },
-                            headlineContent = { Text("隐藏作品标签") },
-                        )
-                        ListItem(
-                            modifier = Modifier.clickable { hideCardsInput = !hideCardsInput },
-                            trailingContent = {
-                                Switch(
-                                    checked = hideCardsInput,
-                                    onCheckedChange = null
-                                )
-                            },
-                            supportingContent = { Text("取决于微信版本, 可能为「卡包」「小店与卡包」") },
-                            headlineContent = { Text("隐藏卡包标签") },
-                        )
-                        ListItem(
-                            modifier = Modifier.clickable { hideEmojiInput = !hideEmojiInput },
-                            trailingContent = {
-                                Switch(
-                                    checked = hideEmojiInput,
-                                    onCheckedChange = null
-                                )
-                            },
-                            headlineContent = { Text("隐藏表情标签") },
-                        )
+                    SegmentedColumn(contentPadding = PaddingValues(0.dp)) {
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.beautify_me_page_hide_moments),
+                                checked = hideMomentsInput,
+                                onCheckedChange = {
+                                    hideMomentsInput = it
+                                    hideMoments = it
+                                },
+                            )
+                        }
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.beautify_me_page_hide_works),
+                                description = stringResource(R.string.beautify_me_page_hide_works_summary),
+                                checked = hideFinderInput,
+                                onCheckedChange = {
+                                    hideFinderInput = it
+                                    hideFinder = it
+                                },
+                            )
+                        }
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.beautify_me_page_hide_cards),
+                                description = stringResource(R.string.beautify_me_page_hide_cards_summary),
+                                checked = hideCardsInput,
+                                onCheckedChange = {
+                                    hideCardsInput = it
+                                    hideCards = it
+                                },
+                            )
+                        }
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.beautify_me_page_hide_stickers),
+                                checked = hideEmojiInput,
+                                onCheckedChange = {
+                                    hideEmojiInput = it
+                                    hideEmoji = it
+                                },
+                            )
+                        }
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = onDismiss) { Text("取消") }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        hideMoments = hideMomentsInput
-                        hideFinder = hideFinderInput
-                        hideCards = hideCardsInput
-                        hideEmoji = hideEmojiInput
-                        onDismiss()
-                    }) {
-                        Text("保存")
-                    }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.dialog_close)) }
                 },
             )
         }
@@ -153,6 +145,7 @@ object HideMeTabPageItems : ClickableFeature(), IResolveDex {
 
     private val selectedTargets: Set<String>
         get() {
+            // Host-owned row labels used only to identify which native rows should be hidden.
             val targets = linkedSetOf<String>()
             if (hideMoments) {
                 targets += "朋友圈"

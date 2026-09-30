@@ -1,12 +1,19 @@
 package dev.ujhhgtg.wekit.features.core
 
 import com.tencent.mm.ui.LauncherUI
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.constants.Preferences
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.cache.DexCacheManager
-import dev.ujhhgtg.wekit.features.api.ui.WeSettingsInjector
+import dev.ujhhgtg.wekit.features.items.beautify.BeautifyConversationList
+import dev.ujhhgtg.wekit.features.items.chat.ConversationGrouping
+import dev.ujhhgtg.wekit.features.items.system.SafeMode
+import dev.ujhhgtg.wekit.i18n.LocaleResourceMode
+import dev.ujhhgtg.wekit.i18n.LocalizedContextFactory
+import dev.ujhhgtg.wekit.i18n.WeKitLocaleController
 import dev.ujhhgtg.wekit.ui.content.DexResolver
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
+import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.TargetProcesses
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.showToast
@@ -25,8 +32,28 @@ object FeaturesLoader {
     private const val TAG = "FeaturesLoader"
 
     fun loadFeatures() {
-        val allFeatures = FeaturesProvider.ALL_HOOK_ITEMS
-        val allDexItems = allFeatures.filterIsInstance<IResolveDex>()
+        val allFeatures = FeaturesProvider.ALL_FEATURES
+        allFeatures.filterIsInstance<SwitchFeature>().forEach(SwitchFeature::loadPersistedState)
+        if (TargetProcesses.isInMain) {
+            // Migrate even when grouping is disabled or its Dex cache needs rebuilding. Reading
+            // legacy style later could mistake a new beauty toggle for the user's pre-upgrade choice.
+            ConversationGrouping.migrateTabStyle(BeautifyConversationList.isLayoutBeautificationEnabled)
+        }
+
+        val safeMode = SafeMode.isEnabled
+        val featuresToStart = if (safeMode) {
+            allFeatures.filterIsInstance<ApiFeature>()
+        } else {
+            allFeatures
+        }
+        if (safeMode) {
+            WeLogger.i(
+                TAG,
+                "safe mode active: loading only ${featuresToStart.size} ApiFeature(s), " +
+                    "skipping ${allFeatures.size - featuresToStart.size} feature(s)",
+            )
+        }
+        val allDexItems = featuresToStart.filterIsInstance<IResolveDex>()
 
         val outdatedItems = DexCacheManager.getOutdatedItems(allDexItems)
         val validItems = allDexItems - outdatedItems.toSet()
@@ -43,11 +70,11 @@ object FeaturesLoader {
             handleBrokenItems(allBrokenItems)
 
         val elapsed = measureTime {
-            allFeatures.forEach { feature ->
+            featuresToStart.forEach { feature ->
                 val isBroken = feature is IResolveDex && allBrokenItems.contains(feature)
 
-                if (isBroken && feature !is WeSettingsInjector) {
-                    WeLogger.w(TAG, "skipping ${feature.name} — incomplete cache, awaiting re-resolution")
+                if (isBroken) {
+                    WeLogger.w(TAG, "skipping ${feature.technicalId} — incomplete cache, awaiting re-resolution")
                     return@forEach
                 }
 
@@ -57,7 +84,12 @@ object FeaturesLoader {
         WeLogger.i(TAG, "loading all features took $elapsed")
 
         if (TargetProcesses.isInMain && Preferences.showStartupToast) {
-            showToast("WeKit 加载成功!")
+            val context = LocalizedContextFactory.create(
+                HostInfo.application,
+                WeKitLocaleController.resolvedLocale,
+                LocaleResourceMode.InjectedHost,
+            )
+            showToast(context, context.getString(R.string.noncompose_features_loaded))
         }
     }
 
@@ -74,7 +106,7 @@ object FeaturesLoader {
         val failedItems = mutableListOf<IResolveDex>()
 
         for (item in items) {
-            val path = (item as BaseFeature).displayName
+            val path = (item as BaseFeature).technicalPath
             try {
                 val cache = DexCacheManager.loadItemCache(item)
                 if (cache == null) {
@@ -95,7 +127,7 @@ object FeaturesLoader {
                 }
             } catch (e: Exception) {
                 WeLogger.e(TAG, "cache load failed for $path", e)
-                runCatching { DexCacheManager.deleteCache(path) }
+                runCatching { DexCacheManager.deleteCache((item as BaseFeature).technicalId) }
                 failedItems += item
             }
         }

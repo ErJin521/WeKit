@@ -6,18 +6,23 @@ import com.tencent.wcdb.DatabaseErrorHandler
 import com.tencent.wcdb.database.SQLiteCipherSpec
 import com.tencent.wcdb.database.SQLiteDatabase
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.constants.Preferences
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+import dev.ujhhgtg.wekit.dexkit.dsl.data
 import dev.ujhhgtg.wekit.dexkit.dsl.dexClass
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
+import dev.ujhhgtg.wekit.features.api.core.models.ChatroomSyncStateReadResult
 import dev.ujhhgtg.wekit.features.api.core.models.SelfProfileField
+import dev.ujhhgtg.wekit.features.api.core.models.WeChatroomSyncState
 import dev.ujhhgtg.wekit.features.api.core.models.WeContact
 import dev.ujhhgtg.wekit.features.api.core.models.WeGroup
 import dev.ujhhgtg.wekit.features.api.core.models.WeMessage
 import dev.ujhhgtg.wekit.features.api.core.models.WeOfficialAccount
+import dev.ujhhgtg.wekit.features.api.core.models.normalizeChatroomMemberIds
 import dev.ujhhgtg.wekit.features.api.net.models.protobuf.ChatRoomDataProto
 import dev.ujhhgtg.wekit.features.core.ApiFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.reflection.BString
 import dev.ujhhgtg.wekit.utils.reflection.int
@@ -29,17 +34,21 @@ import java.lang.reflect.Modifier
 
 @OptIn(ExperimentalSerializationApi::class)
 @SuppressLint("DiscouragedApi")
-@Feature(name = "数据库服务", categories = ["API"], description = "提供数据库直接查询能力")
 object WeDatabaseApi : ApiFeature(), IResolveDex {
 
-    private val classMmKernel by dexClass {
+    override val technicalId = "数据库服务"
+    override val nameRes = R.string.feature_we_database_api_name
+    override val categoryIds = listOf(FeatureCategoryIds.API)
+    override val descriptionRes = R.string.feature_we_database_api_description
+
+    val classMmKernel by dexClass {
         matcher {
             usingEqStrings("MicroMsg.MMKernel", "Kernel not null, has initialized.")
         }
     }
-    private val methodGetStorage by dexMethod {
+    val methodGetStorage by dexMethod {
         matcher {
-            declaredClass(classMmKernel.clazz)
+            declaredClass(classMmKernel.data.name)
             modifiers = Modifier.PUBLIC or Modifier.STATIC
             paramCount = 0
             usingStrings("mCoreStorage not initialized!")
@@ -62,6 +71,14 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
     private val classSqliteDbWrapper by dexClass {
         matcher {
             usingEqStrings("MicroMsg.SqliteDB", "sql is null ")
+        }
+    }
+    val methodSqliteWrapperRawQuery by dexMethod(allowFailure = true) {
+        matcher {
+            modifiers = Modifier.PUBLIC
+            usingEqStrings("sql is null ", "DB IS CLOSED ! {%s}")
+            paramTypes("java.lang.String", "java.lang.String[]", "int")
+            returnType("android.database.Cursor")
         }
     }
 
@@ -306,6 +323,8 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
 
         /** 获取群聊成员列表字符串 */
         const val GROUP_MEMBERS = "SELECT memberlist FROM chatroom WHERE chatroomname = '%s'"
+
+        const val CHATROOM_SYNC_STATE = "SELECT memberlist, chatroomVersion FROM chatroom WHERE chatroomname = ?"
     }
 
     override fun onEnable() {
@@ -530,6 +549,27 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
         }
     }
 
+    fun getChatroomSyncState(roomId: String): ChatroomSyncStateReadResult {
+        if (!isReady || roomId.isEmpty()) return ChatroomSyncStateReadResult.Unavailable
+
+        return try {
+            db.rawQuery(SqlStatements.CHATROOM_SYNC_STATE, arrayOf(roomId)).use { cursor ->
+                if (!cursor.moveToFirst()) return ChatroomSyncStateReadResult.MissingRow
+
+                ChatroomSyncStateReadResult.Available(
+                    WeChatroomSyncState(
+                        roomId = roomId,
+                        memberIds = normalizeChatroomMemberIds(cursor.getString(0).orEmpty()),
+                        memberVersion = if (cursor.isNull(1)) null else cursor.getInt(1),
+                    ),
+                )
+            }
+        } catch (e: Exception) {
+            WeLogger.e(TAG, "failed to get chatroom sync state; roomId=$roomId", e)
+            ChatroomSyncStateReadResult.Unavailable
+        }
+    }
+
     /**
      * 获取指定群聊的成员列表
      * @param groupId 群聊ID
@@ -588,7 +628,7 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
      * 数据来自 chatroom.roomdata protobuf，群主或无邀请者信息时返回空字符串
      * @param groupId 群聊 wxId（xxx@chatroom）
      * @param memberId 成员 wxId
-     * @return 邀请者 wxId，未记录时返回空字符串
+     * @return 邀请者 wxId；没有邀请者记录时返回空字符串。空值不代表当前群主。
      */
     fun getGroupMemberInviter(groupId: String, memberId: String): String {
         if (!groupId.isGroupChatWxId || memberId.isEmpty()) return ""

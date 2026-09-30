@@ -1,19 +1,5 @@
-# App
--keepnames class * implements dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
--keep class com.alibaba.fastjson2.** { *; }
--keep class okhttp3.** { *; }
-
-# Monet overlay builder: ARSCLib + apksig + BouncyCastle
--keep class com.reandroid.** { *; }
--dontwarn com.reandroid.**
--keep class com.android.apksig.** { *; }
--dontwarn com.android.apksig.**
--keep class org.bouncycastle.** { *; }
--dontwarn org.bouncycastle.**
-
 # Attributes
 -keepattributes Signature,RuntimeVisibleAnnotations,AnnotationDefault,LineNumberTable,SourceFile,*Annotation*
--keep class kotlin.Metadata { *; }
 
 # Natives
 -keepclasseswithmembernames class * {
@@ -22,6 +8,17 @@
 
 # libxposed
 -dontwarn io.github.libxposed.annotation.**
+
+# Scripting APIs and Python settings
+-keep public class dev.ujhhgtg.wekit.python.api.** { *; }
+-keep public class dev.ujhhgtg.wekit.features.api.** { public *; }
+-keep public class dev.ujhhgtg.wekit.loader.abc.IHookBridge$IMemberHookParam { public *; }
+
+# DexKit scripting API
+-keep class org.luckypray.dexkit.query.matchers.** { public *; }
+-keep class org.luckypray.dexkit.query.enums.** { public *; }
+-keep class org.luckypray.dexkit.query.**MatcherList { public *; }
+-keep class org.luckypray.dexkit.query.StringMatchersGroupList { public *; }
 
 # BeanShell
 -keep class bsh.This { *; }
@@ -39,6 +36,8 @@
 -keep class bsh.Node { *; }
 -keep class bsh.Modifiers { *; }
 -keep class bsh.snapshot.BshSnapshot { *; }
+
+# Serializables
 -keepclassmembers class * implements java.io.Serializable {
     static final long serialVersionUID;
     private static final java.io.ObjectStreamField[] serialPersistentFields;

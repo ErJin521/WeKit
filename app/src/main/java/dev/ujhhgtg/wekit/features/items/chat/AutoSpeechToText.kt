@@ -2,19 +2,24 @@ package dev.ujhhgtg.wekit.features.items.chat
 
 import android.view.View
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
 import dev.ujhhgtg.wekit.features.api.core.WeServiceApi
 import dev.ujhhgtg.wekit.features.api.core.models.MessageType
 import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageViewApi
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.utils.HookParam
 import dev.ujhhgtg.wekit.utils.collections.LruCache
 import java.lang.reflect.InvocationTargetException
 
-@Feature(name = "自动语音转文字", categories = ["聊天"], description = "自动将语音消息转为文字")
 object AutoSpeechToText : SwitchFeature(),
     WeChatMessageViewApi.ICreateViewListener {
+
+    override val technicalId = "自动语音转文字"
+    override val nameRes = R.string.feature_auto_speech_to_text_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_auto_speech_to_text_description
 
     private val processedMessages = LruCache<Long, Boolean>()
 

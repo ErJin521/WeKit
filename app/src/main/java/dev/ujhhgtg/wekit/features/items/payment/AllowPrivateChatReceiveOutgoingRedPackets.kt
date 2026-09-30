@@ -2,11 +2,16 @@ package dev.ujhhgtg.wekit.features.items.payment
 
 import android.app.Activity
 import dev.ujhhgtg.reflekt.utils.toClass
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 
-@Feature(name = "允许领取私聊红包", categories = ["红包与支付"], description = "允许打开私聊中自己发出的红包\n可能导致发送红包提示「请求不成功」")
 object AllowPrivateChatReceiveOutgoingRedPackets : SwitchFeature() {
+
+    override val technicalId = "允许领取私聊红包"
+    override val nameRes = R.string.feature_allow_private_chat_receive_outgoing_red_packets_name
+    override val categoryIds = listOf(FeatureCategoryIds.PAYMENT)
+    override val descriptionRes = R.string.feature_allow_private_chat_receive_outgoing_red_packets_description
 
     override fun onEnable() {
         listOf(

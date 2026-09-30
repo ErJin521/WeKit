@@ -1,13 +1,18 @@
 package dev.ujhhgtg.wekit.features.items.chat
 
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexConstructor
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.utils.android.showToast
 
-@Feature(name = "拦截异常大小贴纸表情", categories = ["聊天"], description = "拦截某些异常大小表情导致的闪退现象")
 object BlockAbnormalSizeStickers : SwitchFeature(), IResolveDex {
+
+    override val technicalId = "拦截异常大小贴纸表情"
+    override val nameRes = R.string.feature_block_abnormal_size_stickers_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_block_abnormal_size_stickers_description
 
     override fun onEnable() {
         ctorMmWxgfDrawable.hookBefore {
@@ -24,7 +29,7 @@ object BlockAbnormalSizeStickers : SwitchFeature(), IResolveDex {
 
                 // If raw pixel data size (width * height * 4 bytes per pixel) exceeds 50MB
                 if (width.toLong() * height.toLong() * 4L > 52_428_800L) {
-                    showToast("检测到异常大小贴纸表情, 已拦截")
+                    showToast(localizedChatString(R.string.chat_abnormal_sticker_blocked))
 
                     // Patch the dimensions down to a safe 32x32 stub to prevent OOM/Exploits
                     inputBytes[7] = 0.toByte()

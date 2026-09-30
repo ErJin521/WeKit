@@ -4,10 +4,11 @@ import android.view.View
 import android.widget.TextView
 import androidx.core.view.isVisible
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.constants.PackageNames
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.utils.android.Intent
 import dev.ujhhgtg.wekit.utils.android.baseActivity
@@ -17,18 +18,15 @@ import dev.ujhhgtg.wekit.utils.android.baseActivity
  * 有未读互动时显示「N 条新消息」, 只有已读互动时显示「朋友的互动消息」,
  * 一条互动都没有时直接隐藏。这里把最后一种情况也改成显示。
  */
-@Feature(
-    name = "常驻互动消息入口",
-    categories = ["朋友圈"],
-    description = "没有未读互动消息时也在朋友圈顶部显示互动消息入口"
-)
 object AlwaysShowInteractionEntry : SwitchFeature(), IResolveDex {
+
+    override val technicalId = "常驻互动消息入口"
+    override val nameRes = R.string.feature_always_show_interaction_entry_name
+    override val categoryIds = listOf(FeatureCategoryIds.MOMENTS)
+    override val descriptionRes = R.string.feature_always_show_interaction_entry_description
 
     private const val HEADER_UIC =
         "com.tencent.mm.plugin.sns.ui.improve.component.header.ImproveHeaderUIC"
-
-    /** 没有任何互动消息时的文案, 与微信自身的「朋友的互动消息」保持一致 */
-    private const val IDLE_TEXT = "朋友的互动消息"
 
     private const val MSG_UI_WITH_ALL = "${PackageNames.WECHAT}.plugin.sns.ui.SnsMsgUIWithAll"
 
@@ -89,7 +87,7 @@ object AlwaysShowInteractionEntry : SwitchFeature(), IResolveDex {
             noInteractionMessages = true
             val headerUic = extractHeaderUic(thisObject ?: return@hookAfter) ?: return@hookAfter
             notifyLayout(headerUic).isVisible = true
-            notifyContent(headerUic).text = IDLE_TEXT
+            notifyContent(headerUic).text = localizedMomentsString(R.string.moments_interaction_idle)
             // 一条互动消息都没有, 没有可展示的头像
             notifyImg(headerUic).isVisible = false
         }

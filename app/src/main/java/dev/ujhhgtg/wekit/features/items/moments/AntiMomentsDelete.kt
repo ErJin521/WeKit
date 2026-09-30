@@ -1,14 +1,19 @@
 package dev.ujhhgtg.wekit.features.items.moments
 
 import android.content.ContentValues
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeDatabaseListenerApi
 import dev.ujhhgtg.wekit.features.api.net.WeProtoData
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.utils.WeLogger
 
-@Feature(name = "朋友圈防撤回", categories = ["朋友圈"], description = "拦截他人朋友圈删除并添加标记")
 object AntiMomentsDelete : SwitchFeature(), WeDatabaseListenerApi.IUpdateListener {
+
+    override val technicalId = "朋友圈防撤回"
+    override val nameRes = R.string.feature_anti_moments_delete_name
+    override val categoryIds = listOf(FeatureCategoryIds.MOMENTS)
+    override val descriptionRes = R.string.feature_anti_moments_delete_description
 
     private const val TAG = "AntiMomentsDelete"
     private const val TBL_SNS_INFO = "SnsInfo"
@@ -39,7 +44,7 @@ object AntiMomentsDelete : SwitchFeature(), WeDatabaseListenerApi.IUpdateListene
         if (!MomentsContentType.allTypeIds.contains(typeVal)) return
         if (sourceVal != 0) return
 
-        val kindName = MomentsContentType.fromId(typeVal)?.displayName ?: "Unknown[$typeVal]"
+        val kindName = MomentsContentType.fromId(typeVal)?.name ?: "Unknown[$typeVal]"
 
         // 移除来源
         values.remove("sourceType")

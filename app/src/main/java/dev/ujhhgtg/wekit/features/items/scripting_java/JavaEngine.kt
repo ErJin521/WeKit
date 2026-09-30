@@ -1,13 +1,14 @@
 package dev.ujhhgtg.wekit.features.items.scripting_java
 
+import dev.ujhhgtg.wekit.utils.fs.copyFrom
+import kotlin.io.path.outputStream
+import kotlin.io.path.readBytes
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Handler
 import android.os.Looper
-import bsh.BshHook
 import bsh.BshMethod
 import bsh.Interpreter
-import bsh.LocalMethodHookParam
 import bsh.NameSpace
 import dalvik.system.InMemoryDexClassLoader
 import dev.ujhhgtg.reflekt.reflekt
@@ -15,6 +16,7 @@ import dev.ujhhgtg.reflekt.utils.Modifiers
 import dev.ujhhgtg.reflekt.utils.createInstance
 import dev.ujhhgtg.reflekt.utils.toClass
 import dev.ujhhgtg.wekit.BuildConfig
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeApi
 import dev.ujhhgtg.wekit.features.api.core.WeAuthApi
 import dev.ujhhgtg.wekit.features.api.core.WeContactApi
@@ -28,6 +30,7 @@ import dev.ujhhgtg.wekit.features.api.core.models.MessageType
 import dev.ujhhgtg.wekit.features.api.net.WeNetSceneApi
 import dev.ujhhgtg.wekit.features.api.ui.WeCurrentConversationApi
 import dev.ujhhgtg.wekit.features.api.ui.WeMomentsApi
+import dev.ujhhgtg.wekit.extensions.ScriptDepsPack
 import dev.ujhhgtg.wekit.utils.AudioUtils
 import dev.ujhhgtg.wekit.utils.BshSnapshotDecompiler
 import dev.ujhhgtg.wekit.utils.HookParam
@@ -59,7 +62,6 @@ import java.io.InputStream
 import java.lang.reflect.Member
 import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
-import java.nio.file.Files
 import java.util.Properties
 import java.util.function.Consumer
 import java.util.function.Function
@@ -77,29 +79,6 @@ object JavaEngine {
 
     fun executeAllOnLoad(scripts: Map<String, JavaPlugin>) {
         scripts.values.forEach { plugin ->
-            if (BypassScriptsDrm.isEnabled) {
-                val hook = object : BshHook {
-                    override fun beforeLocalMethod(param: LocalMethodHookParam) {
-                        when (param.methodName) {
-                            "isUsingVPN", "isUsingProxy", "hasSuspiciousCertificates", "isSSLValidationBypassed",
-                            "detectPacketCapture", "showAntiCaptureDialog", "fetchBlackListFromNetwork", "checkBlackListSync",
-                            "showBlackToast" -> {
-                                param.isIntercepted = true; param.returnValue = false
-                            }
-
-                            "getBlackFriends" -> {
-                                param.isIntercepted = true; param.returnValue = arrayListOf<Any>()
-                            }
-
-                            "checkAuthorization" -> {
-                                param.isIntercepted = true; param.returnValue = true
-                            }
-                        }
-                    }
-                }
-                Interpreter.bshHookManager.addHook(hook)
-            }
-
             try {
                 initPlugin(plugin)
                 plugin.interpreter.eval(plugin.content)
@@ -243,6 +222,7 @@ object JavaEngine {
 
         val classManager = interpreter.classManager
         classManager.setClassLoader(ClassLoaders.HYBRID)
+        ScriptDepsPack.classLoader()?.let { classManager.addClassLoader(it) }
 
         val nameSpace = interpreter.nameSpace
         initNameSpace(nameSpace, plugin)
@@ -525,9 +505,17 @@ object JavaEngine {
                     val context = HostInfo.application
                     val nm = context.getSystemService<NotificationManager>()
                     val channelId = "script_${plugin.name}"
+                    val localizedPluginName = if (plugin.info.name == "unnamed") {
+                        localizedScriptingJavaString(R.string.java_script_unnamed)
+                    } else {
+                        plugin.info.name
+                    }
                     val channel = NotificationChannel(
                         channelId,
-                        "Script: ${plugin.info.name}",
+                        localizedScriptingJavaString(
+                            R.string.java_script_notification_channel,
+                            localizedPluginName,
+                        ),
                         NotificationManager.IMPORTANCE_DEFAULT
                     )
                     nm.createNotificationChannel(channel)
@@ -598,7 +586,7 @@ object JavaEngine {
                     } else {
                         plugin.dir.resolve(path).toFile().canonicalPath
                     }
-                    val dexBytes = Files.readAllBytes(File(resolved).toPath())
+                    val dexBytes = File(resolved).toPath().readBytes()
                     val loader = InMemoryDexClassLoader(
                         ByteBuffer.wrap(dexBytes), ClassLoaders.MODULE
                     )
@@ -855,7 +843,7 @@ object JavaEngine {
 //                        val sendMsgObject = WeMessageApi.methodGetSendMsgObject.method.invoke(null) ?: return@thread
                             val msgObj = WeMessageApi.classNetSceneSendMsg.clazz.createInstance(toUser, text, 1, 0, null)
 
-                            val queue = WeNetSceneApi.classMmKernel.clazz.reflekt()
+                            val queue = WeDatabaseApi.classMmKernel.clazz.reflekt()
                                 .firstMethod {
                                     returnType = WeNetSceneApi.methodAddNetSceneToQueue.method.declaringClass
                                 }.invokeStatic()!!
@@ -1067,10 +1055,10 @@ object JavaEngine {
                     "sendQuoteMsg", arrayOf(BString, java.lang.Long.TYPE, BString)
                 ) {
                     val talker = it[0] as String
-                    val content = it[1] as String
-                    val msgId = it[2] as Long
+                    val msgId = it[1] as Long
+                    val content = it[2] as String
                     return@BshMethod runCatchingBsh("sendQuoteMsg") {
-                        WeMessageApi.sendQuoteMsgByMsgId(talker, msgId, content)
+                        WeMessageApi.sendQuoteTextByMsgId(talker, msgId, content)
                     }.getOrDefault(false)
                 })
 
@@ -1625,7 +1613,7 @@ object JavaEngine {
                         }.build()
                         val resp = okhttp3.OkHttpClient().newCall(req).execute()
                         val file = File(path)
-                        Files.copy(resp.body.byteStream(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        file.toPath().copyFrom(resp.body.byteStream())
                         cb.accept(file)
                     }.onFailure { cb.accept(null) }
                 }
@@ -1651,7 +1639,7 @@ object JavaEngine {
                             .build()
                         val resp = client.newCall(req).execute()
                         val file = File(path)
-                        Files.copy(resp.body.byteStream(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        file.toPath().copyFrom(resp.body.byteStream())
                         cb.accept(file)
                     }.onFailure { cb.accept(null) }
                 }
@@ -1907,7 +1895,7 @@ object JavaEngine {
                     runCatching {
                         val url = content.replaceFirst("\\[AtWx=([^]]+)]".toRegex(), "$1")
                         val resp = okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder().url(url).build()).execute()
-                        Files.copy(resp.body.byteStream(), java.nio.file.Paths.get(savePath), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        java.nio.file.Paths.get(savePath).copyFrom(resp.body.byteStream())
                     }.onFailure { WeLogger.e(TAG, "downloadImg failed", it) }
                 }
             })

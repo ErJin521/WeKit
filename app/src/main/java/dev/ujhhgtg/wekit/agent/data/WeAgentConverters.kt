@@ -5,8 +5,9 @@ import dev.ujhhgtg.wekit.agent.data.entity.ApprovalStatus
 import dev.ujhhgtg.wekit.agent.data.entity.McpTransport
 import dev.ujhhgtg.wekit.agent.data.entity.MessageRole
 import dev.ujhhgtg.wekit.agent.data.entity.ModelProviderType
+import dev.ujhhgtg.wekit.agent.environment.LinuxEnvironmentType
+import dev.ujhhgtg.wekit.agent.tool.PermissionLevel
 import dev.ujhhgtg.wekit.agent.tool.ProviderKind
-import dev.ujhhgtg.wekit.agent.tool.ToolMode
 import dev.ujhhgtg.wekit.agent.trigger.ScheduleKind
 import dev.ujhhgtg.wekit.agent.trigger.TriggerScope
 import dev.ujhhgtg.wekit.agent.trigger.TriggerType
@@ -44,14 +45,19 @@ class WeAgentConverters {
     fun stringToMcpTransport(v: String?): McpTransport? = v?.let(McpTransport::valueOf)
 
     @TypeConverter
-    fun toolModeToString(v: ToolMode?): String? = v?.name
+    fun permissionLevelToString(v: PermissionLevel?): String? = v?.name
     @TypeConverter
-    fun stringToToolMode(v: String?): ToolMode? = v?.let(ToolMode::valueOf)
+    fun stringToPermissionLevel(v: String?): PermissionLevel? = v?.let(PermissionLevel::valueOf)
 
     @TypeConverter
     fun modelProviderTypeToString(v: ModelProviderType?): String? = v?.name
     @TypeConverter
     fun stringToModelProviderType(v: String?): ModelProviderType? = v?.let(ModelProviderType::valueOf)
+
+    @TypeConverter
+    fun linuxEnvironmentTypeToString(v: LinuxEnvironmentType?): String? = v?.name
+    @TypeConverter
+    fun stringToLinuxEnvironmentType(v: String?): LinuxEnvironmentType? = v?.let(LinuxEnvironmentType::valueOf)
 
     @TypeConverter
     fun triggerTypeToString(v: TriggerType?): String? = v?.name

@@ -1,8 +1,12 @@
+@file:Suppress("AvoidDuplicateDependencies")
+
+import com.android.build.api.variant.BuildConfigField
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 
 plugins {
+    id("dev.ujhhgtg.lsparanoid") version "0.13.3"
     alias(libs.plugins.android.application)
     alias(libs.plugins.google.devtools.ksp)
     alias(libs.plugins.kotlin.compose)
@@ -11,19 +15,64 @@ plugins {
     alias(libs.plugins.aboutlibraries.android)
 }
 
-fun getCommitCount(): Int {
-    return providers.exec {
-        commandLine("git", "rev-list", "--count", "HEAD")
-    }.standardOutput.asText.get().trim().toInt()
+// Decide per variant, so a single assemble invocation can build plain debug and protected release.
+// Validation invocations share main outputs with their tests and must remain entirely unprotected.
+val protectionOverride = providers.gradleProperty("protect").map { value ->
+    requireNotNull(value.toBooleanStrictOrNull()) { "-Pprotect must be true or false" }
+}.orNull
+val protectionValidation = providers.gradleProperty("dexTestWorker").orNull == "true" ||
+    gradle.startParameter.taskNames.any { path ->
+        val name = path.substringAfterLast(':').lowercase()
+        "test" in name || name in setOf(
+            "check", "connectedcheck", "devicecheck", "build", "buildneeded", "builddependents",
+        )
+    }
+
+lsparanoid {
+    variantFilter = { variant ->
+        !protectionValidation && (protectionOverride ?: (variant.buildType == "release"))
+    }
+    backend = providers.gradleProperty("lspBackend").orElse("native").get()
+    automaticLoading = false
+    allowedHostCertificates = mapOf(
+        "com.tencent.mm" to setOf("0fe4ff85c215918396dadc7cd8ce6963339af33d37751a56e54c7206b63a3c7c"),
+    )
+    nativeNdkVersion = providers.gradleProperty("lspNdkVersion").orElse("29.0.14206865").get()
+    omvllPlugin = providers.gradleProperty("lspOmvllPlugin").orNull
+    omvllPythonPath = providers.gradleProperty("lspOmvllPythonPath").orNull
+    classFilter = { it.startsWith("dev.ujhhgtg.wekit.") }
+    excludedClassPrefixes = setOf(
+        "dev.ujhhgtg.wekit.application.ModuleApplication",
+        "dev.ujhhgtg.wekit.loader.startup.ModuleLoader",
+        "dev.ujhhgtg.wekit.loader.entry",
+        "dev.ujhhgtg.wekit.loader.utils.NativeLoader",
+        "dev.ujhhgtg.wekit.loader.utils.ZygiskNativePayload",
+        "dev.ujhhgtg.wekit.constants.PackageNames",
+        "dev.ujhhgtg.wekit.utils.fs.PathUtilsKt",
+        "dev.ujhhgtg.wekit.BuildConfig",
+    )
+    if (backend == "native") {
+        wrappedResourceAccess = true
+        resourceIncludes = setOf("string/*", "plurals/*", "array/*")
+        resourceExcludes = setOf(
+            "string/restart_wechat_to_apply", "string/nav_edit_enable_first",
+            "string/automation_name_required", "string/res_inject_success",
+        )
+    }
 }
 
-fun getGitHash(): String {
-    // fixed width: bare --short widens as history grows and varies across git versions, which would
-    // make versionName disagree with the hash xtask bakes into module.prop and the Zygisk zip name
-    return providers.exec {
-        commandLine("git", "rev-parse", "--short=8", "HEAD")
-    }.standardOutput.asText.get().trim()
-}
+// Keep Git values lazy: reading them during configuration invalidates the configuration cache
+// on every commit. Wire these providers into variant/task inputs instead.
+val commitCount = providers.exec {
+    workingDir(rootProject.layout.projectDirectory)
+    commandLine("git", "rev-list", "--count", "HEAD")
+}.standardOutput.asText.map { it.trim().toInt() }
+
+// Keep the same short-hash width as xtask's module metadata.
+val gitHash = providers.exec {
+    workingDir(rootProject.layout.projectDirectory)
+    commandLine("git", "rev-parse", "--short=8", "HEAD")
+}.standardOutput.asText.map { it.trim() }
 
 android {
     namespace = libs.versions.namespace.get()
@@ -34,22 +83,16 @@ android {
     }
     ndkVersion = libs.versions.ndk.get()
 
-    val commitCount = getCommitCount()
-    val gitHash = getGitHash()
-
     defaultConfig {
         applicationId = libs.versions.namespace.get()
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = commitCount
-        versionName = "git+$gitHash"
 
         ndk {
             // noinspection ChromeOsAbiSupport
-            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+            abiFilters += "arm64-v8a"
         }
 
-        buildConfigField("String", "COMMIT_HASH", "\"${gitHash}\"")
         buildConfigField("String", "TAG", "\"WeKit\"")
         buildConfigField("long", "BUILD_TIMESTAMP", "${System.currentTimeMillis()}L")
     }
@@ -120,6 +163,7 @@ android {
 
         release {
             optimization.enable = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName(if (foundKeystore) "release" else "debug")
         }
     }
@@ -130,11 +174,22 @@ android {
     }
 
     packaging {
+        dex {
+            useLegacyPackaging = true
+        }
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources.excludes += listOf(
             "kotlin/**",
             "**.bin",
             "kotlin-tooling-metadata.json",
-            "META-INF/INDEX.LIST"
+            "META-INF/INDEX.LIST",
+            "META-INF/LICENSE.md",
+            // Monet reads host resource tables with default framework loading disabled.
+            "frameworks/android/**",
+            // Monet signs with RSA; Picnic's post-quantum lookup tables are unused.
+            "org/bouncycastle/pqc/crypto/picnic/**"
         )
         resources.merges += listOf(
             "META-INF/io.netty.versions.properties",
@@ -145,7 +200,7 @@ android {
 
     @Suppress("UnstableApiUsage")
     androidResources {
-        localeFilters += setOf("zh")
+        localeFilters += setOf("zh-rCN", "zh-rTW")
         additionalParameters += listOf("--allow-reserved-package-id", "--package-id", "0x69")
     }
 
@@ -172,6 +227,29 @@ tasks.withType<KotlinCompile> {
 val adbProvider = androidComponents.sdkComponents.adb
 androidComponents {
     onVariants { variant ->
+        variant.outputs.forEach { output ->
+            output.versionCode.set(commitCount)
+            output.versionName.set(gitHash.map { "git+$it" })
+        }
+        variant.buildConfigFields!!.put("COMMIT_HASH", gitHash.map {
+            BuildConfigField("String", "\"$it\"", null)
+        })
+
+        val generateZygiskResources = tasks.register<GenerateZygiskResourcesTask>(
+            "generate${variant.name.replaceFirstChar { it.uppercase() }}ZygiskResources"
+        ) {
+            description = "Generate Zygisk module Resources"
+            templateDir.set(rootProject.layout.projectDirectory.dir("wekit-zygisk/template"))
+            versionCode.set(variant.outputs.single().versionCode)
+            versionName.set(variant.outputs.single().versionName)
+            variantName.set(variant.name)
+            outputDir.set(layout.buildDirectory.dir("generated/zygiskResources/${variant.name}"))
+        }
+        variant.sources.resources!!.addGeneratedSourceDirectory(
+            generateZygiskResources,
+            GenerateZygiskResourcesTask::outputDir
+        )
+
         val kotlinSources = variant.sources.kotlin ?: return@onVariants
 
         kotlinSources.addGeneratedSourceDirectory(
@@ -196,6 +274,21 @@ val generateMethodHashes = tasks.register<GenerateMethodHashesTask>("generateMet
     namespace.set(libs.versions.namespace.get())
 }
 
+val validateDesktopDexResolvers = tasks.register<ValidateDesktopDexResolversTask>("validateDesktopDexResolvers") {
+    description = "Validate that Dex resolvers can run without a live WeChat host"
+    group = "verification"
+    sourceDir.set(file("src/main/java"))
+    includePaths.set(
+        providers.gradleProperty("dexResolverValidationInclude")
+            .map { it.split(',').map(String::trim).filter(String::isNotEmpty) }
+            .orElse(emptyList()),
+    )
+}
+
+tasks.named("preBuild") {
+    dependsOn(validateDesktopDexResolvers)
+}
+
 val generateNewFeatures = tasks.register<GenerateNewFeaturesTask>("generateNewFeatures") {
     description = "Collect features added within the last 30 days of history"
     group = "wekit"
@@ -204,7 +297,47 @@ val generateNewFeatures = tasks.register<GenerateNewFeaturesTask>("generateNewFe
     outputDir.set(layout.buildDirectory.dir("generated/source/newfeatures"))
     namespace.set(libs.versions.namespace.get())
     windowDays.set(30)
-    gitHead.set(getGitHash())
+    gitHead.set(gitHash)
+}
+
+val scriptDeps = configurations.create("scriptDeps") {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+}
+
+val arsclibSource = configurations.create("arsclibSource") {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+// ARSCLib bundles desktop copies of Android/XML Pull APIs. If supplied to R8 as
+// program classes, even AttributeSet::class in host constructor queries gets
+// rewritten to the bundled (obfuscated) copy and no longer matches Android.
+val prepareAndroidArsclib = tasks.register<Jar>("prepareAndroidArsclib") {
+    description = "Prepare Android ARSCLib"
+    from(provider { arsclibSource.map { zipTree(it) } })
+    exclude("android/**", "org/xmlpull/v1/**")
+    archiveFileName.set("arsclib-android.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/arsclib"))
+}
+
+// R8/D8 fat jar, resolved through the project repositories (google()).
+val r8Tool = configurations.detachedConfiguration(
+    dependencies.create("com.android.tools:r8:8.7.18"),
+)
+
+val generateScriptDepsDex = tasks.register<GenerateScriptDepsDexTask>("generateScriptDepsDex") {
+    group = "wekit"
+    description = "Compile the script-deps extension pack DEX (fastjson2 + okhttp + kotlin-stdlib)"
+    jars.from(scriptDeps)
+    r8Classpath.from(r8Tool)
+    minApi.set(28)
+    // Bump together with compileSdk when it changes.
+    androidJar.set(
+        androidComponents.sdkComponents.bootClasspath.map { jars -> jars.first().asFile.absolutePath },
+    )
+    outputDir.set(layout.buildDirectory.dir("outputs/script-deps"))
 }
 
 // --- end tasks ---
@@ -216,8 +349,10 @@ ksp {
 }
 
 dependencies {
+    implementation(project(":libs:python-runtime-api"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.dynamicanimation)
     implementation(libs.androidx.appcompat)
     implementation(libs.android.material)
     implementation(libs.androidx.activity)
@@ -225,6 +360,7 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigationevent.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.compose.runtime)
     implementation(libs.androidx.biometric)
@@ -232,11 +368,10 @@ dependencies {
     implementation(libs.aboutlibraries.core)
     implementation(libs.aboutlibraries.compose.m3)
     implementation(libs.androidx.profileinstaller)
-    implementation(libs.miuix.ui)
-    implementation(libs.miuix.icons)
-    implementation(libs.miuix.preference)
     implementation(libs.miuix.blur)
     implementation(libs.miuix.shader)
+    implementation(libs.miuix.nav)
+    implementation(libs.scripta.editor)
     implementation(libs.materialkolor)
     implementation(libs.coil)
     implementation(libs.coil.compose)
@@ -249,9 +384,13 @@ dependencies {
     implementation(libs.google.protobuf.javalite)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.protobuf)
-    implementation(libs.mmkv)
 
     implementation(project(":libs:common:bsh"))
+    add(arsclibSource.name, libs.arsclib)
+    implementation(files(prepareAndroidArsclib))
+    implementation(libs.apksig)
+    implementation(libs.bouncycastle.prov)
+    implementation(libs.bouncycastle.pkix)
 
     compileOnly(libs.legacyxposed.api)
     compileOnly(libs.libxposed.api)
@@ -261,21 +400,15 @@ dependencies {
     implementation(project(":libs:common:reflekt"))
     implementation(libs.libsu.core)
     implementation(libs.dexmaker)
-//    implementation(libs.arsclib)
-//    implementation(libs.apksig)
-//    implementation(libs.bouncycastle.prov)
-//    implementation(libs.bouncycastle.pkix)
-    @Suppress("AvoidDuplicateDependencies")
     implementation(project(":libs:common:annotation-scanner"))
-    @Suppress("AvoidDuplicateDependencies")
     ksp(project(":libs:common:annotation-scanner"))
 
     implementation(libs.okhttp3.okhttp)
     implementation(libs.jsoup)
 
-    implementation(libs.rhino)
-
-    implementation(libs.fastjson2)
+    scriptDeps(libs.alibaba.fastjson2)
+    scriptDeps(libs.okhttp3.okhttp)
+    scriptDeps(kotlin("stdlib"))
 
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
@@ -300,24 +433,58 @@ dependencies {
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
     implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.jsch)
 
     implementation(libs.osmdroid.android)
 
     compileOnly(project(":libs:common:stubs"))
+
     testImplementation(libs.junit.jupiter)
+    testImplementation(project(":libs:common:stubs"))
+    testImplementation(libs.legacyxposed.api)
+    testImplementation(libs.libxposed.api)
+    testImplementation(libs.sqlite.jdbc)
     testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+val dexTestWorkerProperties = listOf(
+    "wekit.dexTest.apk",
+    "wekit.dexTest.nativeLibrary",
+    "wekit.dexTest.report",
+    "wekit.dexTest.dexKitVersion",
+    "wekit.dexTest.dexKitRevision",
+    "wekit.dexTest.versionCode",
+    "wekit.dexTest.versionName",
+    "wekit.dexTest.buildTag",
+    "wekit.dexTest.isGooglePlay",
+    "wekit.dexTest.features",
+    "wekit.dexTest.workers",
+)
+val dexTestWorker = providers.gradleProperty("dexTestWorker").map(String::toBoolean).orElse(false)
+val monetCorpus = providers.gradleProperty("wekit.monetCorpus").map(String::toBoolean).orElse(false)
+
+tasks.withType<Test>().configureEach {
+    systemProperty("wekit.monetCorpus", monetCorpus.get())
+    // Monet resource-graph tests load complete host APKs.
+    maxHeapSize = "4g"
+    if (dexTestWorker.get()) {
+        filter {
+            includeTestsMatching("dev.ujhhgtg.wekit.dextest.DexTestWorkerTest")
+        }
+        dexTestWorkerProperties.forEach { propertyName ->
+            systemProperty(propertyName, providers.gradleProperty(propertyName).orNull.orEmpty())
+        }
+        outputs.upToDateWhen { false }
+    } else {
+        filter {
+            excludeTestsMatching("dev.ujhhgtg.wekit.dextest.DexTestWorkerTest")
+        }
+    }
 }
 
 // markwon conflict
 configurations.all {
     exclude(group = "org.jetbrains", module = "annotations-java5")
-
-//    resolutionStrategy {
-//        force("androidx.compose.ui:ui:1.12.0-beta01")
-//        force("androidx.compose.ui:ui-android:1.12.0-beta01")
-//        force("androidx.compose.material3:material3:1.5.0-alpha21")
-//        force("androidx.compose.material3:material3-android:1.5.0-alpha21")
-//    }
 }
 
 tasks.withType<KotlinJvmCompile>().configureEach {
@@ -326,3 +493,6 @@ tasks.withType<KotlinJvmCompile>().configureEach {
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3ExpressiveApi")
     }
 }
+
+// The localization adapter remains present in JVM development variants.
+dependencies { implementation("dev.ujhhgtg.lsparanoid:runtime:0.13.3") }

@@ -1,15 +1,20 @@
 package dev.ujhhgtg.wekit.features.items.contacts
 
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeApi
 import dev.ujhhgtg.wekit.features.api.ui.WeConversationContextMenuApi
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.features.items.chat.ConversationAggregation
 import dev.ujhhgtg.wekit.ui.utils.CameraIcon
 import dev.ujhhgtg.wekit.utils.strings.isGroupChatWxId
 
-@Feature(name = "快捷打开朋友圈", categories = ["联系人与群组"], description = "在首页对话列表长按菜单添加菜单项, 可点击一键跳转到朋友圈")
 object QuickOpenMoments : SwitchFeature(), WeConversationContextMenuApi.IMenuItemsProvider {
+
+    override val technicalId = "快捷打开朋友圈"
+    override val nameRes = R.string.feature_quick_open_moments_name
+    override val categoryIds = listOf(FeatureCategoryIds.CONTACTS_GROUPS)
+    override val descriptionRes = R.string.feature_quick_open_moments_description
 
     override fun onEnable() {
         WeConversationContextMenuApi.addProvider(this)
@@ -23,7 +28,7 @@ object QuickOpenMoments : SwitchFeature(), WeConversationContextMenuApi.IMenuIte
         return listOf(
             WeConversationContextMenuApi.MenuItem(
                 id = 777018,
-                text = "朋友圈",
+                text = localizedContactsString(R.string.contacts_open_moments),
                 drawable = CameraIcon,
                 shouldShow = { context, _ ->
                     val talker = context.talker

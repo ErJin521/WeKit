@@ -15,9 +15,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Schedule
+import dev.ujhhgtg.wekit.R
 import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -66,7 +68,7 @@ fun WeDateTimeField(
         singleLine = true,
         isError = isError,
         supportingText = if (isError) {
-            { Text("时间格式不正确 (${mode.pattern})") }
+            { Text(stringResource(R.string.date_time_invalid_format, mode.pattern)) }
         } else null,
         trailingIcon = {
             IconButton(
@@ -87,7 +89,10 @@ fun WeDateTimeField(
                     }
                 },
             ) {
-                Icon(MaterialSymbols.Outlined.Schedule, contentDescription = "选择时间")
+                Icon(
+                    MaterialSymbols.Outlined.Schedule,
+                    contentDescription = stringResource(R.string.date_time_choose_time),
+                )
             }
         },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
@@ -162,7 +167,7 @@ private fun dateTimeFormat() =
     SimpleDateFormat(WeDateTimeMode.DATE_TIME.pattern, Locale.getDefault()).apply { isLenient = false }
 
 /** The current wall-clock time as a minute-of-day, the shape [WeTimeOfDayField] works in. */
-internal fun currentMinuteOfDay(): Int = Calendar.getInstance().let {
+fun currentMinuteOfDay(): Int = Calendar.getInstance().let {
     it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE)
 }
 

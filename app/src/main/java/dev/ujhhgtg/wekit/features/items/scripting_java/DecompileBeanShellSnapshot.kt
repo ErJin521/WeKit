@@ -1,13 +1,18 @@
 package dev.ujhhgtg.wekit.features.items.scripting_java
 
 import androidx.activity.ComponentActivity
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.activity.TransparentActivity
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.utils.registerBshSnapshotDecompileLaunchers
 
-@Feature(name = "反编译 BeanShell 快照", categories = ["脚本 (Java)"], description = "不知道这是干啥的就别管了")
 object DecompileBeanShellSnapshot : ClickableFeature() {
+
+    override val technicalId = "反编译 BeanShell 快照"
+    override val nameRes = R.string.feature_decompile_bean_shell_snapshot_name
+    override val categoryIds = listOf(FeatureCategoryIds.SCRIPTING_JAVA)
+    override val descriptionRes = R.string.feature_decompile_bean_shell_snapshot_description
 
     override val noSwitchWidget = true
 

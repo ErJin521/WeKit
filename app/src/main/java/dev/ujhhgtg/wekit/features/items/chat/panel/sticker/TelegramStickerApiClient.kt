@@ -1,5 +1,11 @@
 package dev.ujhhgtg.wekit.features.items.chat.panel.sticker
 
+import dev.ujhhgtg.wekit.utils.fs.moveReplacing
+import kotlin.io.path.fileSize
+import kotlin.io.path.moveTo
+import kotlin.io.path.outputStream
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.features.items.chat.localizedChatString
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.serialization.DefaultJson
 import kotlinx.coroutines.CancellationException
@@ -17,7 +23,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
-import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
@@ -27,7 +32,7 @@ import kotlin.coroutines.resumeWithException
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.isRegularFile
 
-internal object TelegramStickerApiClient {
+object TelegramStickerApiClient {
     private const val TAG = "TelegramStickerApi"
     private val client = OkHttpClient.Builder()
         .connectTimeout(Duration.ofSeconds(30))
@@ -47,9 +52,9 @@ internal object TelegramStickerApiClient {
         destination: Path,
         expectedSize: Long? = null,
     ) = withContext(Dispatchers.IO) {
-        require(isSafeFilePath(filePath)) { "Telegram 返回了无效文件路径" }
+        require(isSafeFilePath(filePath)) { localizedChatString(R.string.chat_telegram_invalid_file_path) }
         val partial = destination.resolveSibling("${destination.fileName}.part")
-        var existing = partial.takeIf { it.isRegularFile() }?.let(Files::size) ?: 0L
+        var existing = partial.takeIf { it.isRegularFile() }?.fileSize() ?: 0L
         if (expectedSize != null && existing > expectedSize) {
             partial.deleteIfExists()
             existing = 0L
@@ -68,7 +73,7 @@ internal object TelegramStickerApiClient {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                throw IOException("无法连接 Telegram 文件服务", error.withoutSensitiveMessage())
+                throw IOException(localizedChatString(R.string.chat_telegram_file_service_unreachable), error.withoutSensitiveMessage())
             }
             response.use {
                 if (it.code == 416 && attempt == 0) {
@@ -76,7 +81,7 @@ internal object TelegramStickerApiClient {
                     existing = 0L
                     return@repeat
                 }
-                if (!it.isSuccessful) throw TelegramApiException("Telegram 文件下载失败: HTTP ${it.code}")
+                if (!it.isSuccessful) throw TelegramApiException(localizedChatString(R.string.chat_telegram_file_download_failed, it.code))
                 val append = existing > 0L && it.code == 206
                 val options = if (append) {
                     arrayOf(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)
@@ -84,7 +89,7 @@ internal object TelegramStickerApiClient {
                     existing = 0L
                     arrayOf(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
                 }
-                Files.newOutputStream(partial, *options).use { output ->
+                partial.outputStream(*options).use { output ->
                     it.body.byteStream().use { input ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         while (true) {
@@ -96,16 +101,16 @@ internal object TelegramStickerApiClient {
                     }
                 }
             }
-            val downloadedSize = Files.size(partial)
-            require(downloadedSize > 0L) { "Telegram 未返回文件数据" }
+            val downloadedSize = partial.fileSize()
+            require(downloadedSize > 0L) { localizedChatString(R.string.chat_telegram_file_empty) }
             require(expectedSize == null || downloadedSize == expectedSize) {
-                "Telegram 文件下载不完整"
+                localizedChatString(R.string.chat_telegram_file_incomplete)
             }
             moveCompletedDownload(partial, destination)
-            WeLogger.i(TAG, "download completed bytes=${Files.size(destination)}")
+            WeLogger.i(TAG, "download completed bytes=${destination.fileSize()}")
             return@withContext
         }
-        error("Telegram 文件断点续传失败")
+        error(localizedChatString(R.string.chat_telegram_file_resume_failed))
     }
 
     private suspend inline fun <reified T> call(
@@ -126,7 +131,7 @@ internal object TelegramStickerApiClient {
             throw error
         } catch (error: Throwable) {
             WeLogger.w(TAG, "$method failed before response: ${error.javaClass.simpleName}")
-            throw IOException("无法连接 Telegram Bot API", error.withoutSensitiveMessage())
+            throw IOException(localizedChatString(R.string.chat_telegram_api_unreachable), error.withoutSensitiveMessage())
         }
         response.use {
             val payload = it.body.string()
@@ -134,15 +139,15 @@ internal object TelegramStickerApiClient {
                 DefaultJson.decodeFromString<TelegramResponse<T>>(payload)
             }.getOrElse { error ->
                 WeLogger.w(TAG, "$method returned invalid JSON: ${error.javaClass.simpleName}")
-                throw TelegramApiException("Telegram Bot API 返回了无效数据")
+                throw TelegramApiException(localizedChatString(R.string.chat_telegram_api_invalid_data))
             }
             if (!decoded.ok) {
                 throw TelegramApiException(
-                    decoded.description?.take(200) ?: "Telegram Bot API 请求失败",
+                    decoded.description?.take(200) ?: localizedChatString(R.string.chat_telegram_api_request_failed),
                 )
             }
             WeLogger.i(TAG, "$method completed")
-            decoded.result ?: throw TelegramApiException("Telegram Bot API 未返回结果")
+            decoded.result ?: throw TelegramApiException(localizedChatString(R.string.chat_telegram_api_missing_result))
         }
     }
 
@@ -150,14 +155,7 @@ internal object TelegramStickerApiClient {
         value.isNotBlank() && !value.startsWith('/') && value.split('/').none { it == ".." }
 
     private fun moveCompletedDownload(partial: Path, destination: Path) {
-        runCatching {
-            Files.move(
-                partial,
-                destination,
-                StandardCopyOption.REPLACE_EXISTING,
-                StandardCopyOption.ATOMIC_MOVE,
-            )
-        }.getOrElse { Files.move(partial, destination, StandardCopyOption.REPLACE_EXISTING) }
+        partial.moveReplacing(destination)
     }
 
     private suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
@@ -177,7 +175,7 @@ internal object TelegramStickerApiClient {
         IOException(javaClass.simpleName)
 }
 
-internal class TelegramApiException(message: String) : IOException(message)
+class TelegramApiException(message: String) : IOException(message)
 
 @Serializable
 private data class TelegramResponse<T>(
@@ -187,7 +185,7 @@ private data class TelegramResponse<T>(
 )
 
 @Serializable
-internal data class TelegramStickerSet(
+data class TelegramStickerSet(
     val name: String,
     val title: String,
     @SerialName("sticker_type") val stickerType: String = "regular",
@@ -195,7 +193,7 @@ internal data class TelegramStickerSet(
 )
 
 @Serializable
-internal data class TelegramSticker(
+data class TelegramSticker(
     @SerialName("file_id") val fileId: String,
     @SerialName("file_unique_id") val fileUniqueId: String,
     @SerialName("is_animated") val isAnimated: Boolean = false,
@@ -204,7 +202,7 @@ internal data class TelegramSticker(
 )
 
 @Serializable
-internal data class TelegramFile(
+data class TelegramFile(
     @SerialName("file_id") val fileId: String,
     @SerialName("file_unique_id") val fileUniqueId: String,
     @SerialName("file_size") val fileSize: Long? = null,

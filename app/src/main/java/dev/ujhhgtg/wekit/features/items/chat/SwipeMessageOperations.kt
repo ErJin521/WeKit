@@ -14,19 +14,20 @@ import android.view.ViewGroup
 import android.view.animation.OvershootInterpolator
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.clickable
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.Switch
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toColorInt
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+import dev.ujhhgtg.wekit.dexkit.dsl.data
 import dev.ujhhgtg.wekit.dexkit.dsl.dexClass
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
@@ -34,13 +35,15 @@ import dev.ujhhgtg.wekit.features.api.core.WeServiceApi
 import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
 import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageViewApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
+import dev.ujhhgtg.wekit.data.KvStore.prefOption
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
-import dev.ujhhgtg.wekit.ui.content.DefaultColumn
+import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
+import dev.ujhhgtg.wekit.ui.content.m3.SwitchWidget
 import dev.ujhhgtg.wekit.ui.utils.EditIcon
 import dev.ujhhgtg.wekit.ui.utils.ExposurePlus1Icon
-import dev.ujhhgtg.wekit.ui.utils.FormatQuoteIcon
+import dev.ujhhgtg.wekit.ui.utils.ReplyIcon
 import dev.ujhhgtg.wekit.ui.utils.dpToPx
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.HookParam
@@ -49,13 +52,18 @@ import dev.ujhhgtg.wekit.utils.android.showToastSuspend
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.luckypray.dexkit.DexKitBridge
 import java.util.Collections
 import java.util.WeakHashMap
 import kotlin.math.abs
 
-@Feature(name = "滑动消息快捷操作", categories = ["聊天"], description = "在消息上滑动以引用, 并可选复读或编辑为次要操作")
 object SwipeMessageOperations : ClickableFeature(), IResolveDex,
     WeChatMessageViewApi.ICreateViewListener {
+
+    override val technicalId = "滑动消息快捷操作"
+    override val nameRes = R.string.feature_swipe_message_operations_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_swipe_message_operations_description
 
     // Mutable per-view gesture state. RecyclerView recycles message views, so chattingContext is
     // refreshed on every onBindView (see onCreateView) rather than captured once.
@@ -100,6 +108,34 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
                 "warn!!! cacheSize:%s sysSize:%s"
             )
         }
+    }
+
+    // ChattingUIFragment installs this listener on the chat list. On ACTION_DOWN it asks the
+    // current ChatFooter to close the keyboard/panel, then returns false so normal list handling
+    // continues. A blank-area DOWN claimed by our row never reaches that listener, so resolve the
+    // exact ChatFooter call and mirror it at the point where we claim the stream.
+    private val methodChatListOnTouch by dexMethod {
+        searchPackages("com.tencent.mm.ui.chatting")
+        matcher {
+            usingEqStrings("onTouch: touch down", "onTouch: touch up")
+            paramTypes("android.view.View", "android.view.MotionEvent")
+            returnType = "boolean"
+        }
+    }
+
+    private val methodHideChatInput by dexMethod()
+
+    override fun resolveDex(dexKit: DexKitBridge) {
+        methodHideChatInput.setDescriptor(
+            methodChatListOnTouch.data.invokes
+                .distinctBy { it.descriptor }
+                .single {
+                    it.declaredClassName == "com.tencent.mm.pluginsdk.ui.chat.ChatFooter" &&
+                        it.returnTypeName == "void" &&
+                        (it.paramTypeNames == listOf("boolean") ||
+                            it.paramTypeNames == listOf("int", "boolean"))
+                }
+        )
     }
 
     // ── lifecycle ────────────────────────────────────────────────────────────
@@ -295,6 +331,7 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
                     }
                     true
                 } else {
+                    hideChatInput(s.chattingContext!!)
                     false
                 }
             }
@@ -340,7 +377,7 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
         private val root = row.rootView as? ViewGroup
         private val size = 44.dpToPx(row.context)
         private val edgeMargin = 16.dpToPx(row.context)
-        private val quoteIcon = SwipeActionIconView(row.context, FormatQuoteIcon, SwipeActionColor.GREEN)
+        private val quoteIcon = SwipeActionIconView(row.context, ReplyIcon, SwipeActionColor.GREEN)
         private val repeatIcon = SwipeActionIconView(row.context, ExposurePlus1Icon, SwipeActionColor.BLUE)
         private val editIcon = SwipeActionIconView(row.context, EditIcon, SwipeActionColor.ORANGE)
         private val rootLocation = IntArray(2)
@@ -528,52 +565,74 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
             var useEdit by remember { mutableStateOf(useEditInsteadOfRepeat) }
             var secondary by remember { mutableStateOf(enableSecondary) }
             var swap by remember { mutableStateOf(swapDirections) }
-            val sec = if (useEdit) "编辑" else "复读"
+            val sec = stringResource(if (useEdit) R.string.chat_swipe_action_edit else R.string.chat_repeat_menu)
 
             AlertDialogContent(
-                title = { Text("滑动消息快捷操作") },
+                title = { Text(stringResource(R.string.feature_swipe_message_operations_name)) },
                 text = {
-                    DefaultColumn {
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                secondary = !secondary
-                                enableSecondary = secondary
-                            },
-                            trailingContent = {
-                                Switch(checked = secondary, onCheckedChange = null)
-                            },
-                            supportingContent = { Text("启用后, 在支持的消息上可调用次要操作以$sec") },
-                            headlineContent = { Text("启用次要操作") },
-                        )
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                useEdit = !useEdit
-                                useEditInsteadOfRepeat = useEdit
-                            },
-                            trailingContent = {
-                                Switch(checked = useEdit, onCheckedChange = null)
-                            },
-                            supportingContent = { Text("启用后, 次要划动操作变为「编辑」 (仅文字消息); 关闭时为「复读」") },
-                            headlineContent = { Text("使用「编辑」而非「复读」作为次要操作") },
-                        )
-                        ListItem(
-                            modifier = Modifier.clickable {
-                                swap = !swap
-                                swapDirections = swap
-                            },
-                            trailingContent = {
-                                Switch(checked = swap, onCheckedChange = null)
-                            },
-                            supportingContent = { Text("启用后, 左划$sec, 右划引用") },
-                            headlineContent = { Text("对调左右划") },
-                        )
+                    SegmentedColumn(contentPadding = PaddingValues(0.dp)) {
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.chat_swipe_secondary),
+                                description = stringResource(R.string.chat_swipe_secondary_description, sec),
+                                checked = secondary,
+                                onCheckedChange = {
+                                    secondary = it
+                                    enableSecondary = it
+                                },
+                            )
+                        }
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.chat_swipe_use_edit),
+                                description = stringResource(R.string.chat_swipe_edit_description),
+                                checked = useEdit,
+                                onCheckedChange = {
+                                    useEdit = it
+                                    useEditInsteadOfRepeat = it
+                                },
+                            )
+                        }
+                        item {
+                            SwitchWidget(
+                                iconPlaceholder = false,
+                                title = stringResource(R.string.chat_swipe_swap),
+                                description = stringResource(R.string.chat_swipe_swap_description, sec),
+                                checked = swap,
+                                onCheckedChange = {
+                                    swap = it
+                                    swapDirections = it
+                                },
+                            )
+                        }
                     }
-                }
+                },
+                dismissButton = {
+                    TextButton(onDismiss) { Text(stringResource(R.string.dialog_close)) }
+                },
             )
         }
     }
 
     // ── swipe actions ──────────────────────────────────────────────────────────
+
+    private fun hideChatInput(chattingContext: Any) {
+        val apiMan = chattingContext.reflekt()
+            .firstField { type = WeServiceApi.apiManagerClass }
+            .get()!!
+        val api = WeServiceApi.getApiByClass(apiMan, classChattingUiFootComponent.clazz)
+        val chatFooter = api.reflekt()
+            .firstField { type = "com.tencent.mm.pluginsdk.ui.chat.ChatFooter" }
+            .get()!! as ChatFooter
+        val method = methodHideChatInput.method
+        if (method.parameterCount == 1) {
+            method.invoke(chatFooter, true)
+        } else {
+            method.invoke(chatFooter, 0, true)
+        }
+    }
 
     private fun onSwipeQuote(originalView: View, chattingContext: Any) {
         val apiMan = chattingContext.reflekt()
@@ -595,7 +654,7 @@ object SwipeMessageOperations : ClickableFeature(), IResolveDex,
         val context = view.context
         CoroutineScope(Dispatchers.IO).launch {
             val sent = RepeatMessages.repeatMessage(msgInfo)
-            showToastSuspend(context, if (sent) "已复读" else "复读失败! 可能为不支持的消息类型")
+            if (!sent) showToastSuspend(context, context.localizedChatString(R.string.chat_repeat_failed))
         }
     }
 

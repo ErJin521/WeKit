@@ -10,7 +10,7 @@ import dev.ujhhgtg.wekit.agent.data.entity.MessageEntity
 import dev.ujhhgtg.wekit.agent.data.entity.ProviderEntity
 import dev.ujhhgtg.wekit.agent.data.entity.SessionEntity
 import dev.ujhhgtg.wekit.agent.data.entity.ToolCallEntity
-import dev.ujhhgtg.wekit.agent.data.entity.ToolPermissionEntity
+import dev.ujhhgtg.wekit.agent.data.entity.BridgeToolAuditEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -20,6 +20,12 @@ interface SessionDao {
 
     @Query("SELECT * FROM sessions WHERE id = :id")
     suspend fun getById(id: String): SessionEntity?
+
+    @Query("SELECT * FROM sessions")
+    suspend fun getAllOnce(): List<SessionEntity>
+
+    @Query("SELECT linuxEnvironmentId FROM sessions WHERE id = :id")
+    fun observeLinuxEnvironmentId(id: String): Flow<String?>
 
     @Upsert
     suspend fun upsert(session: SessionEntity)
@@ -44,6 +50,21 @@ interface SessionDao {
 
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("UPDATE sessions SET modelId = NULL WHERE modelId IN (:modelIds)")
+    suspend fun clearModelBindings(modelIds: List<String>)
+
+    @Query("UPDATE sessions SET systemPromptId = NULL WHERE systemPromptId = :promptId")
+    suspend fun clearSystemPromptBindings(promptId: String)
+
+    @Query("UPDATE sessions SET linuxEnvironmentId = NULL WHERE linuxEnvironmentId = :environmentId")
+    suspend fun clearLinuxEnvironmentBindings(environmentId: String)
+
+    @Query("UPDATE sessions SET lastEffectiveLinuxEnvironmentId = :environmentId WHERE id = :id")
+    suspend fun setLastEffectiveLinuxEnvironmentId(id: String, environmentId: String)
+
+    @Query("UPDATE sessions SET linuxEnvironmentId = :bindingId, lastEffectiveLinuxEnvironmentId = :effectiveId WHERE id = :id")
+    suspend fun transitionLinuxEnvironment(id: String, bindingId: String?, effectiveId: String)
 }
 
 @Dao
@@ -81,7 +102,7 @@ interface MessageDao {
 
 @Dao
 interface ToolCallDao {
-    @Query("SELECT * FROM tool_calls WHERE messageId = :messageId")
+    @Query("SELECT * FROM tool_calls WHERE messageId = :messageId ORDER BY rowid ASC")
     suspend fun getForMessage(messageId: String): List<ToolCallEntity>
 
     @Query("SELECT * FROM tool_calls WHERE id = :id")
@@ -108,14 +129,23 @@ interface ToolCallDao {
 }
 
 @Dao
+interface BridgeToolAuditDao {
+    @Insert
+    suspend fun insert(entry: BridgeToolAuditEntity)
+
+    @Query("SELECT * FROM bridge_tool_audits WHERE sessionId = :sessionId ORDER BY executedAt ASC")
+    suspend fun getForSession(sessionId: String): List<BridgeToolAuditEntity>
+}
+
+@Dao
 interface ProviderDao {
-    @Query("SELECT * FROM providers")
+    @Query("SELECT * FROM providers ORDER BY name COLLATE NOCASE, id")
     fun observeAll(): Flow<List<ProviderEntity>>
 
-    @Query("SELECT * FROM providers")
+    @Query("SELECT * FROM providers ORDER BY name COLLATE NOCASE, id")
     suspend fun getAll(): List<ProviderEntity>
 
-    @Query("SELECT * FROM providers WHERE enabled = 1")
+    @Query("SELECT * FROM providers WHERE enabled = 1 ORDER BY name COLLATE NOCASE, id")
     suspend fun getEnabled(): List<ProviderEntity>
 
     @Query("SELECT * FROM providers WHERE id = :id")
@@ -126,32 +156,4 @@ interface ProviderDao {
 
     @Query("DELETE FROM providers WHERE id = :id")
     suspend fun deleteById(id: String)
-}
-
-@Dao
-interface ToolPermissionDao {
-    @Query("SELECT * FROM tool_permissions")
-    fun observeAll(): Flow<List<ToolPermissionEntity>>
-
-    @Query("SELECT * FROM tool_permissions")
-    suspend fun getAll(): List<ToolPermissionEntity>
-
-    @Query("SELECT * FROM tool_permissions WHERE providerId = :providerId")
-    suspend fun getForProvider(providerId: String): List<ToolPermissionEntity>
-
-    @Query("SELECT mode FROM tool_permissions WHERE providerId = :providerId AND toolName = :toolName")
-    suspend fun getMode(providerId: String, toolName: String): dev.ujhhgtg.wekit.agent.tool.ToolMode?
-
-    @Upsert
-    suspend fun upsert(permission: ToolPermissionEntity)
-
-    @Upsert
-    suspend fun upsertAll(permissions: List<ToolPermissionEntity>)
-
-    /** Seed factory defaults only for tools not already present (never clobber user overrides). */
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertIfAbsent(permissions: List<ToolPermissionEntity>)
-
-    @Query("DELETE FROM tool_permissions WHERE providerId = :providerId")
-    suspend fun deleteForProvider(providerId: String)
 }

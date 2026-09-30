@@ -2,13 +2,18 @@ package dev.ujhhgtg.wekit.features.items.system
 
 import android.provider.Settings
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 
-@Feature(name = "环境伪装", categories = ["系统与隐私"], description = "伪装未启用 ADB, 开发者选项或 VPN, 可能有助于通过人脸等场景下的环境安全性检测")
 object SpoofEnvironment : SwitchFeature(), IResolveDex {
+
+    override val technicalId = "环境伪装"
+    override val nameRes = R.string.feature_spoof_environment_name
+    override val categoryIds = listOf(FeatureCategoryIds.SYSTEM_PRIVACY)
+    override val descriptionRes = R.string.feature_spoof_environment_description
 
     override fun onEnable() {
         Settings.Global::class.reflekt()

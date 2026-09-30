@@ -2,12 +2,17 @@ package dev.ujhhgtg.wekit.features.api.core
 
 import android.annotation.SuppressLint
 import dev.ujhhgtg.reflekt.utils.makeAccessible
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.core.ApiFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import java.lang.reflect.Method
 
-@Feature(name = "Unsafe 服务", categories = ["API"], description = "提供调用 sun.misc.Unsafe 功能的能力")
 object WeUnsafeApi : ApiFeature() {
+
+    override val technicalId = "Unsafe 服务"
+    override val nameRes = R.string.feature_we_unsafe_api_name
+    override val categoryIds = listOf(FeatureCategoryIds.API)
+    override val descriptionRes = R.string.feature_we_unsafe_api_description
 
     private lateinit var theUnsafe: Any
     private lateinit var mAllocateInstance: Method

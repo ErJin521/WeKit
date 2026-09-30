@@ -5,11 +5,16 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.RippleDrawable
 import android.view.View
 import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 
-@Feature(name = "美化组件按下效果", categories = ["界面美化"], description = "将 View 的背景替换为 RippleDrawable (没写完)")
 object BeautifyViewPressEffect : SwitchFeature() {
+
+    override val technicalId = "美化组件按下效果"
+    override val nameRes = R.string.feature_beautify_view_press_effect_name
+    override val categoryIds = listOf(FeatureCategoryIds.BEAUTIFY)
+    override val descriptionRes = R.string.feature_beautify_view_press_effect_description
 
     override fun onEnable() {
         View::class.reflekt()

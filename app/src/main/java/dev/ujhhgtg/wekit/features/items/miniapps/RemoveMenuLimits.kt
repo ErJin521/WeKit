@@ -1,22 +1,26 @@
 package dev.ujhhgtg.wekit.features.items.miniapps
 
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
 import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
-import dev.ujhhgtg.wekit.utils.TargetProcesses
+import dev.ujhhgtg.wekit.utils.TargetProcess
 import dev.ujhhgtg.wekit.utils.enumValueOfClass
 import org.luckypray.dexkit.query.enums.StringMatchType
 import org.luckypray.dexkit.query.matchers.base.AccessFlagsMatcher
 import java.lang.reflect.Modifier
 
-@Feature(name = "去除菜单限制", categories = ["小程序"], description = "移除小程序右上角菜单的限制")
 object RemoveMenuLimits : SwitchFeature(), IResolveDex {
+
+    override val technicalId = "去除菜单限制"
+    override val nameRes = R.string.feature_remove_menu_limits_name
+    override val categoryIds = listOf(FeatureCategoryIds.MINIAPPS)
+    override val descriptionRes = R.string.feature_remove_menu_limits_description
 
     private lateinit var showAndClickableEnumValue: Any
 
-    // com.tencent.mm.plugin.appbrand.menu.* only runs in the appbrand process.
-    override val shouldLoadInCurrentProcess get() = TargetProcesses.isInMain || TargetProcesses.currentType == TargetProcesses.PROC_APPBRAND
+    override val targetProcesses = setOf(TargetProcess.MAIN, TargetProcess.APPBRAND)
 
     override fun onEnable() {
         listOf(

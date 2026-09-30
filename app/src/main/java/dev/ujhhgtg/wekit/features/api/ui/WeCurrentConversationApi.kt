@@ -2,12 +2,17 @@ package dev.ujhhgtg.wekit.features.api.ui
 
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.core.ApiFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import java.lang.ref.WeakReference
 
-@Feature(name = "当前聊天服务", categories = ["API"], description = "提供当前界面所在的聊天")
 object WeCurrentConversationApi : ApiFeature() {
+
+    override val technicalId = "当前聊天服务"
+    override val nameRes = R.string.feature_we_current_conversation_api_name
+    override val categoryIds = listOf(FeatureCategoryIds.API)
+    override val descriptionRes = R.string.feature_we_current_conversation_api_description
 
     var value: String = ""
 

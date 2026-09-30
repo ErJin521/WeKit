@@ -23,7 +23,7 @@ abstract class HookCallback(val priority: Int = 50) : IHookBridge.IMemberHookCal
     override fun afterHookedMember(param: HookParam) = afterHookedMethod(param)
 }
 
-class OriginalMethodInvoker internal constructor(
+class OriginalMethodInvoker constructor(
     private val hookBridge: IHookBridge,
     private val method: Method,
     private val thisObject: Any?,
@@ -33,7 +33,7 @@ class OriginalMethodInvoker internal constructor(
         hookBridge.invokeOriginalMethod(method, thisObject, args ?: originalArgs)
 }
 
-private val currentHookBridge: IHookBridge
+val currentHookBridge: IHookBridge
     get() = checkNotNull(StartupInfo.hookBridge) {
         "hook bridge is unavailable in the current loader"
     }

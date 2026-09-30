@@ -1,11 +1,13 @@
 package dev.ujhhgtg.wekit.features.items.chat
 
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 
-@Feature(
-    name = "消息长按菜单项合并展示",
-    categories = ["聊天"],
-    description = "开启后, 消息长按菜单只显示一个 WeKit 项, 点击后在对话框中集中展示所有模块菜单项"
-)
-object MergeChatMessageContextMenuItems : SwitchFeature() // actual implementation in WeChatMessageContextMenuApi
+/** Actual implementation lives in WeChatMessageContextMenuApi. */
+object MergeChatMessageContextMenuItems : SwitchFeature() {
+    override val technicalId = "消息长按菜单项合并展示"
+    override val nameRes = R.string.feature_merge_chat_message_context_menu_items_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_merge_chat_message_context_menu_items_description
+}

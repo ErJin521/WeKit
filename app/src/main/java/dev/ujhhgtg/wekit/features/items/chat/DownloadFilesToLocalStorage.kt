@@ -2,10 +2,11 @@ package dev.ujhhgtg.wekit.features.items.chat
 
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Download
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
 import dev.ujhhgtg.wekit.features.api.core.models.MessageType
 import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageContextMenuApi
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.ui.utils.DownloadIcon
 import dev.ujhhgtg.wekit.utils.WeLogger
@@ -15,8 +16,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Feature(name = "文件下载到本地", categories = ["聊天"], description = "在文件消息菜单添加下载按钮, 允许将文件缓存并保存到本地")
 object DownloadFilesToLocalStorage : SwitchFeature(), WeChatMessageContextMenuApi.IMenuItemsProvider {
+
+    override val technicalId = "文件下载到本地"
+    override val nameRes = R.string.feature_download_files_to_local_storage_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_download_files_to_local_storage_description
 
     private const val TAG = "DownloadFilesToLocalStorage"
 
@@ -32,19 +37,19 @@ object DownloadFilesToLocalStorage : SwitchFeature(), WeChatMessageContextMenuAp
         return listOf(
             WeChatMessageContextMenuApi.MenuItem(
                 777022,
-                "下载",
+                localizedChatString(R.string.chat_action_download),
                 DownloadIcon,
                 MaterialSymbols.Outlined.Download,
                 { msgInfo -> msgInfo.type == MessageType.FILE }
             ) { _, _, msgInfo ->
-                showToast("正在缓存并下载...")
+                showToast(localizedChatString(R.string.chat_file_download_preparing))
                 CoroutineScope(Dispatchers.IO).launch {
                     val path = WeMessageApi.downloadFile(msgInfo.instance) ?: run {
                         WeLogger.e(TAG, "failed to cache & download file")
-                        showToastSuspend("文件下载失败! 查看日志以了解错误详情")
+                        showToastSuspend(localizedChatString(R.string.chat_file_download_failed))
                         return@launch
                     }
-                    showToastSuspend("已将文件下载到 $path")
+                    showToastSuspend(localizedChatString(R.string.chat_file_download_success, path))
                 }
             }
         )

@@ -2,10 +2,11 @@ package dev.ujhhgtg.wekit.features.items.chat
 
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Download
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
 import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
 import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageContextMenuApi
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.ui.utils.DownloadIcon
 import dev.ujhhgtg.wekit.utils.WeLogger
@@ -14,9 +15,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-@Feature(name = "贴纸保存到本地", categories = ["聊天"], description = "在贴纸消息菜单添加保存按钮, 允许将图片保存到本地")
 object SaveStickersToLocalStorage : SwitchFeature(),
     WeChatMessageContextMenuApi.IMenuItemsProvider {
+
+    override val technicalId = "贴纸保存到本地"
+    override val nameRes = R.string.feature_save_stickers_to_local_storage_name
+    override val categoryIds = listOf(FeatureCategoryIds.CHAT)
+    override val descriptionRes = R.string.feature_save_stickers_to_local_storage_description
 
     private const val TAG = "SaveStickersToLocalStorage"
 
@@ -33,7 +38,7 @@ object SaveStickersToLocalStorage : SwitchFeature(),
             @Suppress("UNCHECKED_CAST")
             WeChatMessageContextMenuApi.MenuItem(
                 777001,
-                "存本地",
+                localizedChatString(R.string.chat_action_save_locally),
                 DownloadIcon,
                 MaterialSymbols.Outlined.Download,
                 { msgInfo -> msgInfo.type?.isSticker ?: false },
@@ -47,7 +52,12 @@ object SaveStickersToLocalStorage : SwitchFeature(),
                             msgs.forEach { if (saveSticker(it) != null) succeeded++ }
                             showToastSuspend(
                                 view.context,
-                                "已保存 $succeeded/${msgs.size} 条贴纸到本地",
+                                view.context.localizedChatQuantity(
+                                    R.plurals.chat_stickers_saved_locally,
+                                    msgs.size,
+                                    succeeded,
+                                    msgs.size,
+                                ),
                             )
                         }
                     },
@@ -57,8 +67,8 @@ object SaveStickersToLocalStorage : SwitchFeature(),
                     val path = saveSticker(msgInfo)
                     showToastSuspend(
                         view.context,
-                        path?.let { "已将贴纸保存到 $it" }
-                            ?: "贴纸保存失败! 查看日志以了解错误详情",
+                        path?.let { view.context.localizedChatString(R.string.chat_sticker_saved_to, it) }
+                            ?: view.context.localizedChatString(R.string.chat_sticker_save_failed),
                     )
                 }
             }

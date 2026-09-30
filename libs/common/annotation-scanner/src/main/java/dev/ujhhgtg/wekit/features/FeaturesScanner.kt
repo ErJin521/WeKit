@@ -9,34 +9,43 @@ import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.processing.SymbolProcessor
 import com.google.devtools.ksp.processing.SymbolProcessorEnvironment
 import com.google.devtools.ksp.processing.SymbolProcessorProvider
+import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSDeclaration
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
-import com.squareup.kotlinpoet.joinToCode
 import com.squareup.kotlinpoet.ksp.toClassName
 import com.squareup.kotlinpoet.ksp.writeTo
 
 private const val PACKAGE_NAME = "dev.ujhhgtg.wekit"
-private const val HOOKS_CORE_PACKAGE = "$PACKAGE_NAME.features.core"
-private const val BASE_HOOK_ITEM = "BaseFeature"
+private const val FEATURES_CORE_PACKAGE = "$PACKAGE_NAME.features.core"
+private const val EXTENSIONS_PACKAGE = "$PACKAGE_NAME.extensions"
+private const val BASE_FEATURE = "$FEATURES_CORE_PACKAGE.BaseFeature"
+private const val EXTENSION_PACK = "$EXTENSIONS_PACKAGE.ExtensionPack"
+private const val RESOLVER_INTERFACE = "$PACKAGE_NAME.dexkit.abc.IResolveDex"
 
 class FeaturesKspProvider : SymbolProcessorProvider {
-    override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor {
-        return FeaturesScanner(environment.codeGenerator, environment.logger)
-    }
+    override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor =
+        FeaturesScanner(environment.codeGenerator, environment.logger)
 }
 
+/**
+ * Generates runtime registries for source Feature and ExtensionPack objects.
+ *
+ * Multiple Feature objects may share one source file. They are registered independently while
+ * [FeaturesProvider.SOURCE_KEY_BY_FEATURE] maps each object back to the same source key, so the
+ * file-based new-feature timestamp remains shared without imposing a one-object-per-file layout.
+ */
 class FeaturesScanner(
     private val codeGenerator: CodeGenerator,
     private val logger: KSPLogger,
 ) : SymbolProcessor {
-
-    // Guard against being called multiple times (KSP can call process() more than once)
     private var generated = false
 
     @OptIn(KspExperimental::class)
@@ -44,105 +53,170 @@ class FeaturesScanner(
         if (generated) return emptyList()
         generated = true
 
-        val symbols = resolver
-            .getSymbolsWithAnnotation("$HOOKS_CORE_PACKAGE.Feature")
-            .filterIsInstance<KSClassDeclaration>()
+        val objects = resolver.getAllFiles()
+            .flatMap { file -> file.declarations.flatMap(KSDeclaration::classDeclarationsRecursively) }
+            .filter { it.classKind == ClassKind.OBJECT }
             .toList()
+        val features = objects
+            .filter { it.isSubtypeOf(BASE_FEATURE) }
+            .sortedBy { it.qualifiedName!!.asString() }
+        val extensionPacks = objects
+            .filter { it.isSubtypeOf(EXTENSION_PACK) }
+            .sortedBy { it.qualifiedName!!.asString() }
 
-        if (symbols.isEmpty()) return emptyList()
-
-        // Validate: every annotated symbol must be an `object`
-        symbols.forEach { symbol ->
-            if (symbol.classKind != com.google.devtools.ksp.symbol.ClassKind.OBJECT) {
-                logger.error(
-                    "${symbol.qualifiedName?.asString()} is annotated with @Feature but is not an `object`. " +
-                            "Only Kotlin objects are supported.",
-                    symbol
-                )
-            }
+        if (features.isEmpty()) {
+            logger.error("No BaseFeature objects were discovered in app sources")
+            return emptyList()
+        }
+        if (extensionPacks.isEmpty()) {
+            logger.error("No ExtensionPack objects were discovered in app sources")
+            return emptyList()
         }
 
-        val sortedSymbols = symbols.sortedWith(
-            compareBy(
-                // SwitchFeature first, ClickableFeature second
-                { symbol ->
-                    // The whole chain, not just the direct supertypes: features are free to extend
-                    // an intermediate base class (e.g. AutoMomentsBase : ClickableFeature()), and
-                    // those must still be bucketed by the core class they ultimately derive from.
-                    val superTypes = symbol.getAllSuperTypes()
-                        .map { it.declaration.qualifiedName?.asString() }
-                        .toSet()
-                    when {
-                        // ClickableFeature extends SwitchFeature, so the more specific one wins
-                        superTypes.contains("$HOOKS_CORE_PACKAGE.ClickableFeature") -> 1
-                        superTypes.contains("$HOOKS_CORE_PACKAGE.SwitchFeature") -> 0
-                        else -> 2
-                    }
-                },
-                // Then alphabetically by item name safely
-                { symbol ->
-                    val annotation = symbol.annotations.first { it.shortName.asString() == "Feature" }
-                    val nameArg = annotation.arguments.find { it.name?.asString() == "name" } ?: annotation.arguments[0]
-                    nameArg.value as String
-                }
-            )
+        generateFeaturesProvider(features)
+        generateDexResolutionRegistry(features.filter { it.isSubtypeOf(RESOLVER_INTERFACE) })
+        generateExtensionPacksProvider(extensionPacks)
+        return emptyList()
+    }
+
+    private fun generateFeaturesProvider(symbols: List<KSClassDeclaration>) {
+        val baseFeature = ClassName(FEATURES_CORE_PACKAGE, "BaseFeature")
+        val listType = ClassName("kotlin.collections", "List").parameterizedBy(baseFeature)
+        val sourceMapType = ClassName("kotlin.collections", "Map").parameterizedBy(
+            baseFeature,
+            ClassName("kotlin", "String"),
         )
-
-        val baseFeatureClass = ClassName(HOOKS_CORE_PACKAGE, BASE_HOOK_ITEM)
-        val listType = ClassName("kotlin.collections", "List")
-            .parameterizedBy(baseFeatureClass)
-
-        // Build the list initializer as a CodeBlock
-        val initializerBlock = CodeBlock.builder().apply {
-            addStatement("listOf(")
+        val featureList = CodeBlock.builder().apply {
+            add("validateFeatures(\n")
             indent()
-            for (symbol in sortedSymbols) {
-                val typeName = symbol.toClassName()
-
-                // Extract annotation values safely using standard KSP API
-                val annotation = symbol.annotations.first { it.shortName.asString() == "Feature" }
-                val name = (annotation.arguments.find { it.name?.asString() == "name" } ?: annotation.arguments[0]).value as String
-                val categories = (annotation.arguments.find { it.name?.asString() == "categories" } ?: annotation.arguments[1]).value as List<*>
-                val description = (annotation.arguments.find { it.name?.asString() == "description" } ?: annotation.arguments.getOrNull(2))?.value as? String ?: ""
-
-                // Inline apply {} so path/description are set on construction
-                addStatement(
-                    "%T.apply·{ name·=·%S; categories·=·listOf(%L); description·=·%S },",
-                    typeName,
-                    name,
-                    // %S so KotlinPoet escapes quotes/backslashes/`$` in category names for us
-                    categories.map { CodeBlock.of("%S", it.toString()) }.joinToCode(", "),
-                    description,
-                )
+            add("listOf(\n")
+            indent()
+            symbols.forEach { add("%T,\n", it.toClassName()) }
+            unindent()
+            add(")\n")
+            unindent()
+            add(").sortedWith(\n")
+            indent()
+            add("compareBy(\n")
+            indent()
+            add("{ feature ->\n")
+            indent()
+            add("when (feature) {\n")
+            indent()
+            add("is %T -> 1\n", ClassName(FEATURES_CORE_PACKAGE, "ClickableFeature"))
+            add("is %T -> 0\n", ClassName(FEATURES_CORE_PACKAGE, "SwitchFeature"))
+            add("else -> 2\n")
+            unindent()
+            add("}\n")
+            unindent()
+            add("},\n")
+            add("{ feature -> feature.technicalId },\n")
+            unindent()
+            add(")\n")
+            unindent()
+            add(")")
+        }.build()
+        val sourceKeys = CodeBlock.builder().apply {
+            add("mapOf(\n")
+            indent()
+            symbols.forEach { symbol ->
+                val source = symbol.containingFile!!
+                val sourceKey = source.packageName.asString().replace('.', '/') + "/" + source.fileName
+                add("%T to %S,\n", symbol.toClassName(), sourceKey)
             }
             unindent()
             add(")")
         }.build()
-
-        // `val ALL_HOOK_ITEMS: List<BaseFeature> = listOf(...)`
-        val property = PropertySpec.builder("ALL_HOOK_ITEMS", listType)
-            .initializer(initializerBlock)
-            .build()
-
-        val objectSpec = TypeSpec.objectBuilder("FeaturesProvider")
-            .addProperty(property)
-            .addKdoc(
-                "Auto-generated by [${PACKAGE_NAME}.features.FeaturesScanner]. Do not edit manually.\n" +
-                        "Contains all classes annotated with [%T].\n",
-                ClassName(HOOKS_CORE_PACKAGE, "Feature"),
+        val provider = TypeSpec.objectBuilder("FeaturesProvider")
+            .addProperty(PropertySpec.builder("ALL_FEATURES", listType).initializer(featureList).build())
+            .addProperty(
+                PropertySpec.builder("SOURCE_KEY_BY_FEATURE", sourceMapType)
+                    .initializer(sourceKeys)
+                    .build(),
             )
+            .addKdoc("Auto-generated runtime Feature registry. Do not edit manually.\n")
             .build()
-
-        val dependencies = Dependencies(
-            aggregating = true,
-            *symbols.map { it.containingFile!! }.toTypedArray()
-        )
-
-        FileSpec.builder(HOOKS_CORE_PACKAGE, "FeaturesProvider")
-            .addType(objectSpec)
+        FileSpec.builder(FEATURES_CORE_PACKAGE, "FeaturesProvider")
+            .addType(provider)
             .build()
-            .writeTo(codeGenerator, dependencies)
+            .writeTo(codeGenerator, dependencies(symbols))
+    }
 
-        return emptyList()
+    private fun generateDexResolutionRegistry(symbols: List<KSClassDeclaration>) {
+        val entryType = ClassName(FEATURES_CORE_PACKAGE, "DexResolutionTestEntry")
+        val stringType = ClassName("kotlin", "String")
+        val entryClass = TypeSpec.classBuilder(entryType.simpleName)
+            .addModifiers(com.squareup.kotlinpoet.KModifier.DATA)
+            .primaryConstructor(FunSpec.constructorBuilder().addParameter("className", stringType).build())
+            .addProperty(PropertySpec.builder("className", stringType).initializer("className").build())
+            .build()
+        val entries = CodeBlock.builder().apply {
+            add("listOf(\n")
+            indent()
+            symbols.forEach { add("%T(%S),\n", entryType, it.qualifiedName!!.asString()) }
+            unindent()
+            add(")")
+        }.build()
+        val registry = TypeSpec.objectBuilder("DexResolutionTestRegistry")
+            .addProperty(
+                PropertySpec.builder(
+                    "ITEMS",
+                    ClassName("kotlin.collections", "List").parameterizedBy(entryType),
+                ).initializer(entries).build(),
+            )
+            .addKdoc("Auto-generated lazy registry for desktop DexKit tests.\n")
+            .build()
+        FileSpec.builder(FEATURES_CORE_PACKAGE, "DexResolutionTestRegistry")
+            .addType(entryClass)
+            .addType(registry)
+            .build()
+            .writeTo(codeGenerator, dependencies(symbols))
+    }
+
+    private fun generateExtensionPacksProvider(symbols: List<KSClassDeclaration>) {
+        val extensionPack = ClassName(EXTENSIONS_PACKAGE, "ExtensionPack")
+        val initializer = CodeBlock.builder().apply {
+            add("validateExtensionPacks(\n")
+            indent()
+            add("listOf(\n")
+            indent()
+            symbols.forEach { add("%T,\n", it.toClassName()) }
+            unindent()
+            add(").sortedWith(compareBy({ it.displayOrder }, { it.id })),\n")
+            unindent()
+            add(")")
+        }.build()
+        val provider = TypeSpec.objectBuilder("ExtensionPacksProvider")
+            .addProperty(
+                PropertySpec.builder(
+                    "ALL_PACKS",
+                    ClassName("kotlin.collections", "List").parameterizedBy(extensionPack),
+                ).initializer(initializer).build(),
+            )
+            .addKdoc("Auto-generated extension pack registry. Do not edit manually.\n")
+            .build()
+        FileSpec.builder(EXTENSIONS_PACKAGE, "ExtensionPacksProvider")
+            .addType(provider)
+            .build()
+            .writeTo(codeGenerator, dependencies(symbols))
+    }
+
+    private fun dependencies(symbols: List<KSClassDeclaration>): Dependencies = Dependencies(
+        aggregating = true,
+        *symbols.map { it.containingFile!! }.distinct().toTypedArray(),
+    )
+}
+
+@OptIn(KspExperimental::class)
+private fun KSClassDeclaration.isSubtypeOf(qualifiedName: String): Boolean =
+    getAllSuperTypes().any { it.declaration.qualifiedName?.asString() == qualifiedName }
+
+private fun KSDeclaration.classDeclarationsRecursively(): Sequence<KSClassDeclaration> = sequence {
+    val declaration = this@classDeclarationsRecursively
+    if (declaration is KSClassDeclaration) {
+        yield(declaration)
+        declaration.declarations.forEach { child ->
+            yieldAll(child.classDeclarationsRecursively())
+        }
     }
 }

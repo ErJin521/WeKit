@@ -10,7 +10,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import dev.ujhhgtg.wekit.features.items.contacts.HideContacts
-import dev.ujhhgtg.wekit.preferences.WePrefs
+import dev.ujhhgtg.wekit.data.KvStore
 import dev.ujhhgtg.wekit.utils.HostInfo
 import dev.ujhhgtg.wekit.utils.TargetProcesses
 import dev.ujhhgtg.wekit.utils.WeLogger
@@ -22,7 +22,7 @@ import java.util.Calendar
 private const val TAG = "HideContacts.Schedule"
 
 /** `Calendar.SUNDAY..Calendar.SATURDAY` — the default (and maximal) [HideSchedule.daysOfWeek]. */
-internal val ALL_DAYS_OF_WEEK: Set<Int> = (Calendar.SUNDAY..Calendar.SATURDAY).toSet()
+val ALL_DAYS_OF_WEEK: Set<Int> = (Calendar.SUNDAY..Calendar.SATURDAY).toSet()
 
 /**
  * One user-defined "alarm" that flips 隐藏联系人's temporary-show state at a chosen time.
@@ -32,7 +32,7 @@ internal val ALL_DAYS_OF_WEEK: Set<Int> = (Calendar.SUNDAY..Calendar.SATURDAY).t
  * the user's configuration.
  */
 @Serializable
-internal data class HideSchedule(
+data class HideSchedule(
     /** Stable identity: the `AlarmManager` request code and the list key. See [newHideScheduleId]. */
     val id: String,
     val enabled: Boolean = true,
@@ -47,18 +47,18 @@ internal data class HideSchedule(
 )
 
 @Serializable
-internal enum class HideScheduleAction { HIDE, SHOW }
+enum class HideScheduleAction { HIDE, SHOW }
 
 @Serializable
-internal enum class HideScheduleKind { REPEATING, ONCE }
+enum class HideScheduleKind { REPEATING, ONCE }
 
 /** Mirrors `ConversationGrouping`'s id scheme: monotonic and unique enough for a hand-edited list. */
-internal fun newHideScheduleId(): String = "hsched_${System.currentTimeMillis()}"
+fun newHideScheduleId(): String = "hsched_${System.currentTimeMillis()}"
 
 // The install/uninstall pair, named like the other hook installers in this package.
-internal fun HideContacts.installSchedules() = HideContactsSchedule.install()
+fun HideContacts.installSchedules() = HideContactsSchedule.install()
 
-internal fun HideContacts.uninstallSchedules() = HideContactsSchedule.uninstall()
+fun HideContacts.uninstallSchedules() = HideContactsSchedule.uninstall()
 
 /**
  * The 定时显示/隐藏 scheduler.
@@ -97,7 +97,7 @@ internal fun HideContacts.uninstallSchedules() = HideContactsSchedule.uninstall(
  * 显示/隐藏 flip after a flight or a DST switch was judged not worth a broadcast receiver whose only
  * job is to call [resync].
  */
-internal object HideContactsSchedule {
+object HideContactsSchedule {
 
     private const val KEY_SCHEDULES = "hide_contacts_schedules"
 
@@ -117,7 +117,7 @@ internal object HideContactsSchedule {
      */
     private const val URI_SCHEME = "wekit"
 
-    private var raw by WePrefs.prefOption(KEY_SCHEDULES, "")
+    private var raw by KvStore.prefOption(KEY_SCHEDULES, "")
 
     /** Whether [install] has run in this process. Guards [resync] against arming a disabled feature. */
     private var installed = false
@@ -134,7 +134,7 @@ internal object HideContactsSchedule {
     // ── persistence ──────────────────────────────────────────────────────────────────────────────
 
     /**
-     * The schedule list, sanitized. Reads parse from [WePrefs] every time (the list is tiny and only
+     * The schedule list, sanitized. Reads parse from [KvStore] every time (the list is tiny and only
      * touched on alarm fire / edit), so a write from the settings UI is visible to the receiver
      * immediately.
      *

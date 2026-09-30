@@ -1,14 +1,11 @@
 package dev.ujhhgtg.wekit.features.items.contacts
 
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearWavyProgressIndicator
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableIntState
@@ -18,10 +15,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Add
 import com.composables.icons.materialsymbols.outlined.Delete
+import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.core.WeApi
 import dev.ujhhgtg.wekit.features.api.core.WeContactApi
 import dev.ujhhgtg.wekit.features.api.core.WeContactLabelApi
@@ -31,12 +32,19 @@ import dev.ujhhgtg.wekit.features.api.net.WePacketHelper
 import dev.ujhhgtg.wekit.features.api.net.models.protobuf.BeforeTransferReqProto
 import dev.ujhhgtg.wekit.features.api.net.models.protobuf.BeforeTransferRespProto
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
+import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
+import dev.ujhhgtg.wekit.data.KvStore
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
 import dev.ujhhgtg.wekit.ui.content.DefaultColumn
 import dev.ujhhgtg.wekit.ui.content.IconButton
 import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.m3.BaseWidget
+import dev.ujhhgtg.wekit.ui.content.m3.DropDownMenuWidget
+import dev.ujhhgtg.wekit.ui.content.m3.DropdownOption
+import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
+import dev.ujhhgtg.wekit.ui.content.m3.TextFieldDialogWidget
+import dev.ujhhgtg.wekit.ui.content.m3.lazySegmentedItems
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.copyToClipboard
@@ -47,104 +55,250 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-@Feature(name = "检测单向删除好友", categories = ["联系人与群组"], description = "批量扫描全部好友, 检测是否被对方单向删除")
 object DetectDeletedFriends : ClickableFeature() {
+
+    override val technicalId = "检测单向删除好友"
+    override val nameRes = R.string.feature_detect_deleted_friends_name
+    override val categoryIds = listOf(FeatureCategoryIds.CONTACTS_GROUPS)
+    override val descriptionRes = R.string.feature_detect_deleted_friends_description
 
     override val noSwitchWidget = true
 
     private const val TAG = "DetectDeletedFriends"
+    private const val SUGGESTED_LABEL_CHOICE_KEY = "suggested_label"
+
+    private enum class DetectionMode(val labelRes: Int) {
+        BEFORE_TRANSFER(R.string.contacts_detect_mode_before_transfer),
+        VERIFY_USER(R.string.contacts_detect_mode_verify_user),
+    }
+
+    private enum class AbnormalFriendStatus(val labelRes: Int) {
+        BEFORE_TRANSFER_ABNORMAL(R.string.contacts_detect_status_transfer_abnormal),
+        DELETED(R.string.contacts_detect_status_deleted),
+        BLACKLISTED(R.string.contacts_detect_status_blacklisted),
+        ACCOUNT_RESTRICTED(R.string.contacts_detect_status_account_restricted),
+    }
+
+    private data class AbnormalFriend(
+        val status: AbnormalFriendStatus,
+        val contact: WeContact,
+    )
+
+    private sealed interface DetectionOutcome {
+        data object Normal : DetectionOutcome
+        data class Abnormal(val friend: AbnormalFriend) : DetectionOutcome
+        data object Failed : DetectionOutcome
+        data object RateLimited : DetectionOutcome
+    }
+
+    private var detectionModeName by KvStore.prefOption(
+        "detect_deleted_friends_mode",
+        DetectionMode.BEFORE_TRANSFER.name,
+    )
+    private var requestDelaySeconds by KvStore.prefOption(
+        "detect_deleted_friends_delay_seconds",
+        "2",
+    )
+
+    private sealed class LabelChoice {
+        data class Suggested(val labelName: String) : LabelChoice()
+        data class Existing(val label: WeContactLabelApi.ContactLabel) : LabelChoice()
+    }
 
     private sealed class DialogPhase {
         data object Idle : DialogPhase()
         data class Scanning(
             val completed: MutableIntState,
             val total: Int,
-            val abnormalFriends: MutableList<WeContact> = mutableListOf()
+            val mode: DetectionMode,
+            val requestDelayMillis: Long,
+            val abnormalFriends: MutableList<AbnormalFriend> = mutableListOf(),
         ) : DialogPhase()
 
-        data class Done(val friends: List<WeContact>) : DialogPhase()
+        data class Done(val friends: List<AbnormalFriend>) : DialogPhase()
         data class SelectLabel(
-            val friends: List<WeContact>,
+            val friends: List<AbnormalFriend>,
             val suggestedLabelName: String
         ) : DialogPhase()
 
         data class Marking(
-            val friends: List<WeContact>,
+            val friends: List<AbnormalFriend>,
             val labelName: String,
             val completed: MutableIntState,
             val total: Int
         ) : DialogPhase()
 
         data class ConfirmDelete(
-            val allFriends: List<WeContact>,
-            val targets: List<WeContact>
+            val allFriends: List<AbnormalFriend>,
+            val targets: List<AbnormalFriend>
         ) : DialogPhase()
 
         data class Deleting(
-            val allFriends: List<WeContact>,
-            val targets: List<WeContact>,
+            val allFriends: List<AbnormalFriend>,
+            val targets: List<AbnormalFriend>,
             val completed: MutableIntState,
             val total: Int,
-            val failed: MutableList<WeContact> = mutableListOf()
+            val failed: MutableList<AbnormalFriend> = mutableListOf()
         ) : DialogPhase()
+    }
+
+    private suspend fun detectWithBeforeTransfer(contact: WeContact): DetectionOutcome =
+        withTimeoutOrNull(20.seconds) {
+            suspendCancellableCoroutine { cont ->
+                WePacketHelper.sendCgi(
+                    "/cgi-bin/mmpay-bin/beforetransfer",
+                    2783,
+                    0,
+                    0,
+                    BeforeTransferReqProto(userName = contact.wxId).encode(),
+                ) {
+                    onSuccess { bytes ->
+                        try {
+                            val realName = bytes
+                                ?.let { BeforeTransferRespProto.decode(it) }
+                                ?.maskedRealName
+                            WeLogger.d(TAG, "realName=$realName")
+                            val result = if (realName == null) {
+                                DetectionOutcome.Abnormal(
+                                    AbnormalFriend(
+                                        AbnormalFriendStatus.BEFORE_TRANSFER_ABNORMAL,
+                                        contact,
+                                    )
+                                )
+                            } else {
+                                DetectionOutcome.Normal
+                            }
+                            if (cont.isActive) cont.resume(result)
+                        } catch (e: Throwable) {
+                            WeLogger.e(TAG, "failed to decode before-transfer response for ${contact.wxId}", e)
+                            if (cont.isActive) cont.resume(DetectionOutcome.Failed)
+                        }
+                    }
+
+                    onFailure { errType, errCode, errMsg ->
+                        WeLogger.w(TAG, "failed friend ${contact.wxId}: $errType, $errCode, $errMsg")
+                        val result = if (
+                            errType == 4 && errCode == -34 || errMsg.contains("操作过于频繁")
+                        ) {
+                            DetectionOutcome.RateLimited
+                        } else {
+                            DetectionOutcome.Failed
+                        }
+                        if (cont.isActive) cont.resume(result)
+                    }
+                }
+            }
+        } ?: DetectionOutcome.Failed
+
+    private fun filterPositiveDecimal(input: String): String = buildString {
+        var hasDecimalPoint = false
+        input.forEach { char ->
+            when {
+                char.isDigit() -> append(char)
+                char == '.' && !hasDecimalPoint -> {
+                    if (isEmpty()) append('0')
+                    append(char)
+                    hasDecimalPoint = true
+                }
+            }
+        }
     }
 
     override fun onClick(context: ComponentActivity) {
         val friends = WeDatabaseApi.getFriends().filter { c ->
-            c.type != 2051 && c.type != 2049 && c.wxId != WeApi.selfWxId
+            c.type != 2051 && c.type != 2049 && c.wxId != WeApi.selfWxId && c.wxId != "filehelper"
         }
 
         showComposeDialog(context) {
             var phase by remember { mutableStateOf<DialogPhase>(DialogPhase.Idle) }
             var availableLabels by remember { mutableStateOf<List<WeContactLabelApi.ContactLabel>?>(null) }
+            var selectedMode by remember { mutableStateOf(DetectionMode.valueOf(detectionModeName)) }
+            var requestDelayInput by remember { mutableStateOf(requestDelaySeconds) }
+            var unresolvedCount by remember { mutableIntStateOf(0) }
 
             LaunchedEffect(phase) {
                 if (phase is DialogPhase.Scanning) {
                     dialog.setCancelable(false)
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val scanningPhase = phase as DialogPhase.Scanning
-                        val abnormalFriends = scanningPhase.abnormalFriends
-                        for (friend in friends) {
-                            // detect whether user quitted halfway
-                            if (phase !is DialogPhase.Scanning) {
-                                break
-                            }
+                    val scanningPhase = phase as DialogPhase.Scanning
+                    var rateLimited = false
+                    for ((index, friend) in friends.withIndex()) {
+                        if (phase !== scanningPhase) break
 
-                            WePacketHelper.sendCgi(
-                                "/cgi-bin/mmpay-bin/beforetransfer", 2783, 0, 0,
-                                BeforeTransferReqProto(userName = friend.wxId).encode()
+                        val outcome = when (scanningPhase.mode) {
+                            DetectionMode.BEFORE_TRANSFER -> detectWithBeforeTransfer(friend)
+                            DetectionMode.VERIFY_USER -> when (
+                                val result = WeContactApi.probeRelationship(friend.wxId)
                             ) {
-                                onSuccess { bytes ->
-                                    val realName = bytes
-                                        ?.let { BeforeTransferRespProto.decode(it) }
-                                        ?.maskedRealName
-                                    WeLogger.d(TAG, "realName=$realName")
-                                    if (realName == null) {
-                                        synchronized(abnormalFriends) {
-                                            // TODO: figure out status, might have to perform another request
-                                            //       update: seems that wechat modified their server-side logic
-                                            //       now it is impossible to tell the difference
-                                            abnormalFriends += friend
-                                        }
-                                    }
-                                    scanningPhase.completed.intValue++
+                                WeContactApi.RelationshipProbeResult.Normal -> DetectionOutcome.Normal
+                                WeContactApi.RelationshipProbeResult.Deleted ->
+                                    DetectionOutcome.Abnormal(
+                                        AbnormalFriend(
+                                            AbnormalFriendStatus.DELETED,
+                                            friend,
+                                        )
+                                    )
+                                WeContactApi.RelationshipProbeResult.Blacklisted ->
+                                    DetectionOutcome.Abnormal(
+                                        AbnormalFriend(AbnormalFriendStatus.BLACKLISTED, friend)
+                                    )
+                                is WeContactApi.RelationshipProbeResult.AccountRestricted ->
+                                    DetectionOutcome.Abnormal(
+                                        AbnormalFriend(
+                                            AbnormalFriendStatus.ACCOUNT_RESTRICTED,
+                                            friend,
+                                        )
+                                    )
+                                is WeContactApi.RelationshipProbeResult.RateLimited -> {
+                                    WeLogger.w(TAG, "verify-user scan rate limited: ${result.message}")
+                                    DetectionOutcome.RateLimited
                                 }
-
-                                onFailure { errType, errCode, errMsg ->
-                                    WeLogger.w(TAG, "failed friend ${friend.wxId}: $errType, $errCode, $errMsg")
-                                    scanningPhase.completed.intValue++
+                                is WeContactApi.RelationshipProbeResult.Failed -> {
+                                    WeLogger.w(
+                                        TAG,
+                                        "verify-user probe failed for ${friend.wxId}: " +
+                                            "${result.errType}, ${result.errCode}, ${result.message}",
+                                    )
+                                    DetectionOutcome.Failed
+                                }
+                                WeContactApi.RelationshipProbeResult.Timeout -> {
+                                    WeLogger.w(TAG, "verify-user probe timed out for ${friend.wxId}")
+                                    DetectionOutcome.Failed
                                 }
                             }
-                            // seems like WeChat's server rate limits requests
-                            delay(1.seconds)
                         }
+                        when (outcome) {
+                            DetectionOutcome.Normal -> Unit
+                            is DetectionOutcome.Abnormal ->
+                                scanningPhase.abnormalFriends += outcome.friend
+                            DetectionOutcome.Failed -> unresolvedCount++
+                            DetectionOutcome.RateLimited -> {
+                                unresolvedCount += friends.size - index
+                                rateLimited = true
+                            }
+                        }
+                        scanningPhase.completed.intValue++
 
-                        if (phase is DialogPhase.Scanning) {
-                            phase = DialogPhase.Done(synchronized(abnormalFriends) { abnormalFriends.toList() })
-                            dialog.setCancelable(true)
+                        if (rateLimited) break
+                        if (index != friends.lastIndex) {
+                            delay(scanningPhase.requestDelayMillis.milliseconds)
                         }
+                    }
+
+                    if (phase === scanningPhase) {
+                        if (rateLimited) {
+                            showToast(
+                                context,
+                                context.localizedContactsString(R.string.contacts_detect_rate_limited),
+                            )
+                        }
+                        phase = DialogPhase.Done(scanningPhase.abnormalFriends.toList())
+                        dialog.setCancelable(true)
                     }
                 } else if (phase is DialogPhase.SelectLabel) {
                     dialog.setCancelable(true)
@@ -164,17 +318,24 @@ object DetectDeletedFriends : ClickableFeature() {
                             if (phase is DialogPhase.Marking) {
                                 phase = DialogPhase.Done(markingPhase.friends)
                                 dialog.setCancelable(true)
-                                showToastSuspend(context, "创建标签「${markingPhase.labelName}」失败")
+                                showToastSuspend(
+                                    context,
+                                    context.localizedContactsString(
+                                        R.string.contacts_detect_create_label_failed,
+                                        markingPhase.labelName,
+                                    ),
+                                )
                             }
                             return@launch
                         }
 
-                        for (friend in markingPhase.friends) {
+                        for (abnormalFriend in markingPhase.friends) {
                             // detect whether user quitted halfway
                             if (phase !is DialogPhase.Marking) {
                                 break
                             }
 
+                            val friend = abnormalFriend.contact
                             // additive: keep existing labels and append the target one
                             val existing = WeContactLabelApi.getLabelNamesForContact(friend.wxId)
                             if (markingPhase.labelName !in existing) {
@@ -191,7 +352,10 @@ object DetectDeletedFriends : ClickableFeature() {
                         if (phase is DialogPhase.Marking) {
                             phase = DialogPhase.Done(markingPhase.friends)
                             dialog.setCancelable(true)
-                            showToastSuspend(context, "标记完成")
+                            showToastSuspend(
+                                context,
+                                context.localizedContactsString(R.string.contacts_detect_marking_done),
+                            )
                         }
                     }
                 } else if (phase is DialogPhase.Deleting) {
@@ -199,17 +363,20 @@ object DetectDeletedFriends : ClickableFeature() {
                     CoroutineScope(Dispatchers.IO).launch {
                         val deletingPhase = phase as DialogPhase.Deleting
                         val deleted = mutableSetOf<String>()
-                        for (friend in deletingPhase.targets) {
+                        for (abnormalFriend in deletingPhase.targets) {
                             // detect whether user quitted halfway
                             if (phase !is DialogPhase.Deleting) {
                                 break
                             }
 
+                            val friend = abnormalFriend.contact
                             val ok = WeContactApi.deleteContact(friend.wxId)
                             if (ok) {
                                 deleted += friend.wxId
                             } else {
-                                synchronized(deletingPhase.failed) { deletingPhase.failed += friend }
+                                synchronized(deletingPhase.failed) {
+                                    deletingPhase.failed += abnormalFriend
+                                }
                             }
                             deletingPhase.completed.intValue++
                             // seems like WeChat's server rate limits requests
@@ -218,13 +385,20 @@ object DetectDeletedFriends : ClickableFeature() {
 
                         if (phase is DialogPhase.Deleting) {
                             // drop successfully deleted friends from the result list
-                            val remaining = deletingPhase.allFriends.filter { it.wxId !in deleted }
+                            val remaining = deletingPhase.allFriends.filter {
+                                it.contact.wxId !in deleted
+                            }
                             val failedCount = synchronized(deletingPhase.failed) { deletingPhase.failed.size }
                             phase = DialogPhase.Done(remaining)
                             dialog.setCancelable(true)
                             showToastSuspend(
                                 context,
-                                "删除完成: 成功 ${deleted.size}, 失败 $failedCount"
+                                context.localizedContactsQuantity(
+                                    R.plurals.contacts_detect_delete_done,
+                                    deleted.size,
+                                    deleted.size,
+                                    failedCount,
+                                ),
                             )
                         }
                     }
@@ -232,53 +406,122 @@ object DetectDeletedFriends : ClickableFeature() {
             }
 
             AlertDialogContent(
-                title = { Text(text = if (phase is DialogPhase.Idle) "警告" else "检测单向删除好友") },
+                title = {
+                    Text(
+                        text = stringResource(
+                            if (phase is DialogPhase.Idle) R.string.contacts_detect_warning_title
+                            else R.string.feature_detect_deleted_friends_name,
+                        ),
+                    )
+                },
                 text = {
                     when (phase) {
-                        is DialogPhase.Idle -> Text(text = "此功能可能导致账号异常, 确定要执行吗?")
+                        is DialogPhase.Idle -> DefaultColumn {
+                            Text(text = stringResource(R.string.contacts_detect_warning_message))
+                            SegmentedColumn(contentPadding = PaddingValues(0.dp)) {
+                                item(key = "detection_mode") {
+                                    DropDownMenuWidget(
+                                        title = stringResource(R.string.contacts_detect_mode),
+                                        description = null,
+                                        value = selectedMode,
+                                        options = DetectionMode.entries.map { mode ->
+                                            DropdownOption(mode, stringResource(mode.labelRes))
+                                        },
+                                        onValueChange = { mode ->
+                                            selectedMode = mode
+                                            detectionModeName = mode.name
+                                        },
+                                    )
+                                }
+                                item(key = "request_delay") {
+                                    TextFieldDialogWidget(
+                                        title = stringResource(R.string.contacts_detect_request_delay),
+                                        value = requestDelayInput,
+                                        onValueChange = { input ->
+                                            val value = input.toDoubleOrNull()
+                                            if (value != null && value > 0.0 && value.isFinite()) {
+                                                requestDelayInput = input
+                                                requestDelaySeconds = input
+                                            }
+                                        },
+                                        dialogTitle = stringResource(R.string.contacts_detect_request_delay),
+                                        confirmLabel = stringResource(android.R.string.ok),
+                                        dismissLabel = stringResource(android.R.string.cancel),
+                                        keyboardType = KeyboardType.Decimal,
+                                        filter = ::filterPositiveDecimal,
+                                    )
+                                }
+                            }
+                        }
 
                         is DialogPhase.Scanning -> {
                             val completed by (phase as DialogPhase.Scanning).completed
                             val total = (phase as DialogPhase.Scanning).total
                             DefaultColumn {
-                                Text("正在扫描, 请稍等...\n已完成: $completed/$total")
+                                Text(
+                                    pluralStringResource(
+                                        R.plurals.contacts_detect_scanning,
+                                        total,
+                                        completed,
+                                        total,
+                                    ),
+                                )
                                 LinearWavyProgressIndicator(progress = { completed.toFloat() / total })
                             }
                         }
 
                         is DialogPhase.Done -> {
                             val abnormalFriends = (phase as DialogPhase.Done).friends
-                            Text("扫描完成, 有 ${abnormalFriends.size} 个状态异常的好友")
+                            DefaultColumn {
+                                Text(
+                                    pluralStringResource(
+                                        R.plurals.contacts_detect_scan_done,
+                                        abnormalFriends.size,
+                                        abnormalFriends.size,
+                                    ),
+                                )
+                                if (unresolvedCount > 0) {
+                                    Text(
+                                        pluralStringResource(
+                                            R.plurals.contacts_detect_unresolved,
+                                            unresolvedCount,
+                                            unresolvedCount,
+                                        )
+                                    )
+                                }
+                            }
                             LazyColumn {
-                                items(abnormalFriends) { friend ->
-                                    ListItem(
-                                        modifier = Modifier.clickable {
+                                lazySegmentedItems(
+                                    abnormalFriends,
+                                    key = { it.contact.wxId },
+                                ) { abnormalFriend ->
+                                    val friend = abnormalFriend.contact
+                                    BaseWidget(
+                                        title = friend.displayName,
+                                        description = listOf(
+                                            stringResource(abnormalFriend.status.labelRes),
+                                            stringResource(R.string.contacts_detect_nickname, friend.nickname),
+                                            stringResource(R.string.contacts_detect_remark, friend.remarkName),
+                                            stringResource(R.string.contacts_wechat_id_value, friend.wxId),
+                                            stringResource(R.string.contacts_detect_wechat_number, friend.customWxId),
+                                        ).joinToString("\n"),
+                                        onClick = {
                                             WeApi.openContact(context, friend.wxId, WeApi.OpenContactDestination.HOMEPAGE)
                                         },
                                         trailingContent = {
                                             IconButton(onClick = {
                                                 phase = DialogPhase.ConfirmDelete(
                                                     allFriends = abnormalFriends,
-                                                    targets = listOf(friend)
+                                                    targets = listOf(abnormalFriend)
                                                 )
                                             }) {
                                                 Icon(
                                                     MaterialSymbols.Outlined.Delete,
-                                                    contentDescription = "删除",
+                                                    contentDescription = stringResource(R.string.action_delete),
                                                     modifier = Modifier.size(24.dp)
                                                 )
                                             }
                                         },
-                                        supportingContent = {
-                                            Column {
-                                                Text("状态: 异常")
-                                                Text("昵称: ${friend.nickname}")
-                                                Text("备注: ${friend.remarkName}")
-                                                Text("微信 ID: ${friend.wxId}")
-                                                Text("微信号: ${friend.customWxId}")
-                                            }
-                                        },
-                                        headlineContent = { Text(friend.displayName) },
                                     )
                                 }
                             }
@@ -287,8 +530,11 @@ object DetectDeletedFriends : ClickableFeature() {
                         is DialogPhase.ConfirmDelete -> {
                             val confirmPhase = phase as DialogPhase.ConfirmDelete
                             Text(
-                                "确定要删除选中的 ${confirmPhase.targets.size} 个好友吗?\n" +
-                                        "此操作不可逆, 删除后聊天记录将被清除, 需对方重新添加."
+                                pluralStringResource(
+                                    R.plurals.contacts_detect_confirm_delete,
+                                    confirmPhase.targets.size,
+                                    confirmPhase.targets.size,
+                                ),
                             )
                         }
 
@@ -296,7 +542,14 @@ object DetectDeletedFriends : ClickableFeature() {
                             val completed by (phase as DialogPhase.Deleting).completed
                             val total = (phase as DialogPhase.Deleting).total
                             DefaultColumn {
-                                Text("正在删除好友, 请稍等...\n已完成: $completed/$total")
+                                Text(
+                                    pluralStringResource(
+                                        R.plurals.contacts_detect_deleting,
+                                        total,
+                                        completed,
+                                        total,
+                                    ),
+                                )
                                 LinearWavyProgressIndicator(progress = { completed.toFloat() / total })
                             }
                         }
@@ -305,44 +558,47 @@ object DetectDeletedFriends : ClickableFeature() {
                             val selectPhase = phase as DialogPhase.SelectLabel
                             val labels = availableLabels
                             DefaultColumn {
-                                Text("选择一个标签, 将应用到全部 ${selectPhase.friends.size} 个异常好友")
+                                Text(
+                                    pluralStringResource(
+                                        R.plurals.contacts_detect_select_label,
+                                        selectPhase.friends.size,
+                                        selectPhase.friends.size,
+                                    ),
+                                )
                                 if (labels == null) {
                                     LinearWavyProgressIndicator()
                                 } else {
                                     LazyColumn {
-                                        // always offer creating a fresh, timestamped label
-                                        item {
-                                            ListItem(
-                                                modifier = Modifier.clickable {
+                                        val choices = listOf(
+                                            LabelChoice.Suggested(selectPhase.suggestedLabelName),
+                                        ) + labels.map { LabelChoice.Existing(it) }
+                                        lazySegmentedItems(
+                                            choices,
+                                            key = { choice ->
+                                                when (choice) {
+                                                    is LabelChoice.Suggested -> SUGGESTED_LABEL_CHOICE_KEY
+                                                    is LabelChoice.Existing -> choice.label.labelId
+                                                }
+                                            },
+                                        ) { choice ->
+                                            val suggested = choice is LabelChoice.Suggested
+                                            val labelName = when (choice) {
+                                                is LabelChoice.Suggested -> choice.labelName
+                                                is LabelChoice.Existing -> choice.label.labelName
+                                            }
+                                            BaseWidget(
+                                                icon = MaterialSymbols.Outlined.Add.takeIf { suggested },
+                                                title = labelName,
+                                                description = stringResource(R.string.contacts_detect_new_label)
+                                                    .takeIf { suggested },
+                                                onClick = {
                                                     phase = DialogPhase.Marking(
                                                         friends = selectPhase.friends,
-                                                        labelName = selectPhase.suggestedLabelName,
+                                                        labelName = labelName,
                                                         completed = mutableIntStateOf(0),
                                                         total = selectPhase.friends.size
                                                     )
                                                 },
-                                                leadingContent = {
-                                                    Icon(
-                                                        MaterialSymbols.Outlined.Add,
-                                                        contentDescription = "新建标签",
-                                                        modifier = Modifier.size(24.dp)
-                                                    )
-                                                },
-                                                supportingContent = { Text("新建标签") },
-                                                headlineContent = { Text(selectPhase.suggestedLabelName) },
-                                            )
-                                        }
-                                        items(labels) { label ->
-                                            ListItem(
-                                                modifier = Modifier.clickable {
-                                                    phase = DialogPhase.Marking(
-                                                        friends = selectPhase.friends,
-                                                        labelName = label.labelName,
-                                                        completed = mutableIntStateOf(0),
-                                                        total = selectPhase.friends.size
-                                                    )
-                                                },
-                                                headlineContent = { Text(label.labelName) },
                                             )
                                         }
                                     }
@@ -354,7 +610,15 @@ object DetectDeletedFriends : ClickableFeature() {
                             val completed by (phase as DialogPhase.Marking).completed
                             val total = (phase as DialogPhase.Marking).total
                             DefaultColumn {
-                                Text("正在标记为「${(phase as DialogPhase.Marking).labelName}」, 请稍等...\n已完成: $completed/$total")
+                                Text(
+                                    pluralStringResource(
+                                        R.plurals.contacts_detect_marking,
+                                        total,
+                                        (phase as DialogPhase.Marking).labelName,
+                                        completed,
+                                        total,
+                                    ),
+                                )
                                 LinearWavyProgressIndicator(progress = { completed.toFloat() / total })
                             }
                         }
@@ -363,7 +627,7 @@ object DetectDeletedFriends : ClickableFeature() {
                 dismissButton = when (phase) {
                     is DialogPhase.Idle -> {
                         {
-                            TextButton(onDismiss) { Text("取消") }
+                            TextButton(onDismiss) { Text(stringResource(R.string.dialog_cancel)) }
                         }
                     }
 
@@ -372,12 +636,12 @@ object DetectDeletedFriends : ClickableFeature() {
                             TextButton(onClick = {
                                 val scanningPhase = phase as DialogPhase.Scanning
                                 // display current snapshot immediately
-                                val foundSoFar = synchronized(scanningPhase.abnormalFriends) {
-                                    scanningPhase.abnormalFriends.toList()
-                                }
+                                unresolvedCount +=
+                                    scanningPhase.total - scanningPhase.completed.intValue
+                                val foundSoFar = scanningPhase.abnormalFriends.toList()
                                 phase = DialogPhase.Done(foundSoFar)
                                 dialog.setCancelable(true)
-                            }) { Text("终止") }
+                            }) { Text(stringResource(R.string.contacts_detect_stop)) }
                         }
                     }
 
@@ -385,7 +649,7 @@ object DetectDeletedFriends : ClickableFeature() {
                         {
                             TextButton(onClick = {
                                 phase = DialogPhase.Done((phase as DialogPhase.SelectLabel).friends)
-                            }) { Text("返回") }
+                            }) { Text(stringResource(R.string.contacts_detect_back)) }
                         }
                     }
 
@@ -394,7 +658,7 @@ object DetectDeletedFriends : ClickableFeature() {
                             TextButton(onClick = {
                                 phase = DialogPhase.Done((phase as DialogPhase.Marking).friends)
                                 dialog.setCancelable(true)
-                            }) { Text("终止") }
+                            }) { Text(stringResource(R.string.contacts_detect_stop)) }
                         }
                     }
 
@@ -402,7 +666,7 @@ object DetectDeletedFriends : ClickableFeature() {
                         {
                             TextButton(onClick = {
                                 phase = DialogPhase.Done((phase as DialogPhase.ConfirmDelete).allFriends)
-                            }) { Text("取消") }
+                            }) { Text(stringResource(R.string.dialog_cancel)) }
                         }
                     }
 
@@ -414,7 +678,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                 val deletingPhase = phase as DialogPhase.Deleting
                                 phase = DialogPhase.Done(deletingPhase.allFriends)
                                 dialog.setCancelable(true)
-                            }) { Text("终止") }
+                            }) { Text(stringResource(R.string.contacts_detect_stop)) }
                         }
                     }
 
@@ -424,9 +688,19 @@ object DetectDeletedFriends : ClickableFeature() {
                     is DialogPhase.Idle -> {
                         {
                             Button(onClick = {
-                                phase = DialogPhase.Scanning(mutableIntStateOf(0), friends.size)
+                                unresolvedCount = 0
+                                val requestDelayMillis =
+                                    (requestDelayInput.toDouble() * 1_000.0)
+                                        .toLong()
+                                        .coerceAtLeast(1L)
+                                phase = DialogPhase.Scanning(
+                                    completed = mutableIntStateOf(0),
+                                    total = friends.size,
+                                    mode = selectedMode,
+                                    requestDelayMillis = requestDelayMillis,
+                                )
                             })
-                            { Text("确定") }
+                            { Text(stringResource(R.string.dialog_confirm)) }
                         }
                     }
 
@@ -438,29 +712,37 @@ object DetectDeletedFriends : ClickableFeature() {
                                     availableLabels = null
                                     phase = DialogPhase.SelectLabel(
                                         friends = abnormalFriends,
-                                        suggestedLabelName = "WeKit_单删好友_${formatEpoch(System.currentTimeMillis(), includeDate = true)}"
+                                        suggestedLabelName = context.localizedContactsString(
+                                            R.string.contacts_detect_suggested_label,
+                                            formatEpoch(System.currentTimeMillis(), includeDate = true),
+                                        ),
                                     )
-                                }) { Text("标记标签") }
+                                }) { Text(stringResource(R.string.contacts_detect_mark_label)) }
                                 TextButton(onClick = {
                                     phase = DialogPhase.ConfirmDelete(
                                         allFriends = abnormalFriends,
                                         targets = abnormalFriends
                                     )
-                                }) { Text("全部删除") }
+                                }) { Text(stringResource(R.string.contacts_detect_delete_all)) }
                             }
                             Button(onClick = {
-                                val text = abnormalFriends.joinToString("\n\n") { friend ->
+                                val text = abnormalFriends.joinToString("\n\n") { abnormalFriend ->
+                                    val friend = abnormalFriend.contact
                                     buildString {
-                                        appendLine("状态: 异常")
-                                        appendLine("昵称: ${friend.nickname}")
-                                        appendLine("备注: ${friend.remarkName}")
-                                        appendLine("微信 ID: ${friend.wxId}")
-                                        appendLine("微信号: ${friend.customWxId}")
+                                        appendLine(
+                                            context.localizedContactsString(
+                                                abnormalFriend.status.labelRes
+                                            )
+                                        )
+                                        appendLine(context.localizedContactsString(R.string.contacts_detect_nickname, friend.nickname))
+                                        appendLine(context.localizedContactsString(R.string.contacts_detect_remark, friend.remarkName))
+                                        appendLine(context.localizedContactsString(R.string.contacts_wechat_id_value, friend.wxId))
+                                        appendLine(context.localizedContactsString(R.string.contacts_detect_wechat_number, friend.customWxId))
                                     }
                                 }
                                 copyToClipboard(context, text)
-                                showToast(context, "已复制")
-                            }) { Text("复制") }
+                                showToast(context, context.localizedContactsString(R.string.contacts_copied))
+                            }) { Text(stringResource(R.string.contacts_copy)) }
                         }
                     }
 
@@ -474,7 +756,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                     completed = mutableIntStateOf(0),
                                     total = confirmPhase.targets.size
                                 )
-                            }) { Text("删除") }
+                            }) { Text(stringResource(R.string.action_delete)) }
                         }
                     }
 

@@ -1,7 +1,13 @@
 enableFeaturePreview("NO_IMPLICIT_LOOKUP_IN_PARENT_PROJECTS")
+// Required while the scripta composite build is present: its settings enables typesafe project
+// accessors, which makes Gradle generate accessors for this build too. A project literally named
+// "extensions" would generate getExtensions(), clashing with ExtensionAware.getExtensions()
+// (AbstractMethodError) — hence the module lives in extension-packs/.
+enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {
     repositories {
+        mavenLocal { content { includeGroup("dev.ujhhgtg.lsparanoid") } }
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -18,39 +24,17 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-//        maven {
-//            url = uri("$rootDir/local-maven")
-//            content {
-//                includeModule("androidx.compose.ui", "ui")
-//                includeModule("androidx.compose.ui", "ui-android")
-//                includeModule("androidx.compose.ui", "ui-jvmstubs")
-//                includeModule("androidx.compose.ui", "ui-linuxx64stubs")
-//                includeModule("androidx.compose.material3", "material3")
-//                includeModule("androidx.compose.material3", "material3-android")
-//                includeModule("androidx.compose.material3", "material3-jvmstubs")
-//                includeModule("androidx.compose.material3", "material3-linuxx64stubs")
-//            }
-//        }
+        mavenLocal { content { includeGroup("dev.ujhhgtg.lsparanoid") } }
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
                 includeGroupByRegex("com\\.google.*")
                 includeGroupByRegex("androidx.*")
-
-//                excludeModule("androidx.compose.ui", "ui")
-//                excludeModule("androidx.compose.ui", "ui-android")
-//                excludeModule("androidx.compose.ui", "ui-jvmstubs")
-//                excludeModule("androidx.compose.ui", "ui-linuxx64stubs")
-//                excludeModule("androidx.compose.material3", "material3")
-//                excludeModule("androidx.compose.material3", "material3-android")
-//                excludeModule("androidx.compose.material3", "material3-jvmstubs")
-//                excludeModule("androidx.compose.material3", "material3-linuxx64stubs")
             }
         }
         maven("https://jitpack.io") {
             content {
                 includeGroup("com.github.Ujhhgtg")
-                includeGroup("com.github.Ujhhgtg.rhino")
                 includeGroup("com.github.topjohnwu.libsu")
             }
         }
@@ -87,10 +71,15 @@ plugins {
 
 rootProject.name = "wekit"
 
+// Composite build: scripta code editor (not published to Maven Central; keep its own
+// toolchain, plugins and version catalog).
+includeBuild("libs/common/scripta")
+
 include(
     ":app",
     ":libs:common:annotation-scanner",
     ":libs:common:stubs",
     ":libs:common:bsh",
-    ":libs:common:reflekt"
+    ":libs:common:reflekt",
+    ":libs:python-runtime-api",
 )
